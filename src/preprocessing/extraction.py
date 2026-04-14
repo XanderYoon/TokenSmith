@@ -7,6 +7,20 @@ from docling.datamodel.pipeline_options import PdfPipelineOptions
 from docling.document_converter import DocumentConverter, PdfFormatOption, InputFormat
 from docling.backend.docling_parse_v2_backend import DoclingParseV2DocumentBackend
 
+TOP_LEVEL_HEADING_RE = re.compile(
+    r"^## (?P<number>\d+\.\d+)\s+(?P<title>.+?)\s*$",
+    re.MULTILINE,
+)
+PAGE_MARKER_RE = re.compile(r"^--- Page \d+ ---$")
+HEADING_LINE_RE = re.compile(r"^#{1,6}\s+")
+LIST_LINE_RE = re.compile(r"^(?:[-*+]\s+|\d+\.\s+)")
+
+def _get_runtime_project_root() -> Path:
+    cwd_root = Path.cwd()
+    if (cwd_root / "data" / "chapters").exists():
+        return cwd_root
+    return Path(__file__).resolve().parent.parent.parent
+
 def extract_sections_from_markdown(
     file_path: str,
     exclusion_keywords: List[str] = None
@@ -32,76 +46,53 @@ def extract_sections_from_markdown(
         print(f"An error occurred: {e}")
         return []
 
-    # The regular expression looks for lines starting with '## '
-    # This will act as our delimiter for splitting the text.
-    # We use a positive lookahead (?=...) to keep the delimiter (the heading)
-    # in the resulting chunks.
-    heading_pattern = r'(?=^## \d+(\.\d+)* .*)'
-    numbering_pattern = re.compile(r"(\d+(?:\.\d+)*)")
-    chunks = re.split(heading_pattern, content, flags=re.MULTILINE)
-
     sections = []
-    
-    # The first chunk might be content before the first heading.
-    if chunks[0].strip():
+
+    top_level_matches = list(TOP_LEVEL_HEADING_RE.finditer(content))
+    if not top_level_matches:
+        cleaned_content = preprocess_extracted_section(content)
+        return [{"heading": "Introduction", "content": cleaned_content}] if cleaned_content else []
+
+    intro_content = preprocess_extracted_section(content[:top_level_matches[0].start()])
+    if intro_content:
         sections.append({
             'heading': 'Introduction',
-            'content': chunks[0].strip()
+            'content': intro_content
         })
 
-    # Process the rest of the chunks
-    for chunk in chunks[1:]:
-        if not chunk:
-            continue
-        if chunk.strip():
-            # Split the chunk into the heading and the rest of the content
-            parts = chunk.split('\n', 1)
-            heading = parts[0].strip()
-            heading = heading.lstrip('#').strip()
-            heading = f"Section {heading}"
+    for idx, match in enumerate(top_level_matches):
+        next_start = (
+            top_level_matches[idx + 1].start()
+            if idx + 1 < len(top_level_matches)
+            else len(content)
+        )
+        heading = f"Section {match.group('number')} {match.group('title')}"
 
-            # Exclude sections based on keywords if provided
-            if exclusion_keywords is not None:
-                if any(keyword.lower() in heading.lower() for keyword in exclusion_keywords):
-                    continue
-
-            section_content = parts[1].strip() if len(parts) > 1 else ''
-            
-            if section_content == '':
+        if exclusion_keywords is not None:
+            if any(keyword.lower() in heading.lower() for keyword in exclusion_keywords):
                 continue
-            else:
-                # Clean the section content
-                section_content = preprocess_extracted_section(section_content)
-            
-            # Determine the section level based on numbering
-            match = numbering_pattern.search(heading)
-            if match:
-                assert match.lastindex >= 1, f"No capturing group for section number in heading: {heading}"
 
-                section_number = match.group(1)
+        section_content = preprocess_extracted_section(content[match.end():next_start])
+        if not section_content:
+            continue
 
-                assert isinstance(section_number, str) and section_number.strip(), \
-                    f"Invalid section number extracted from heading: {heading}"
+        section_number = match.group("number")
+        assert isinstance(section_number, str) and section_number.strip(), \
+            f"Invalid section number extracted from heading: {heading}"
+        assert all(part.isdigit() for part in section_number.split('.')), \
+            f"Malformed section numbering '{section_number}' in heading: {heading}"
 
-                assert all(part.isdigit() for part in section_number.split('.')), \
-                    f"Malformed section numbering '{section_number}' in heading: {heading}"
+        try:
+            chapter_num = int(section_number.split('.')[0])
+        except ValueError:
+            chapter_num = 0
 
-                # Logic: "1.8.1" (2 dots) -> Level 3
-                current_level = section_number.count('.') + 1
-                try:
-                    chapter_num = int(section_number.split('.')[0])
-                except ValueError:
-                    chapter_num = 0
-            else:
-                current_level = 1
-                chapter_num = 0
-
-            sections.append({
-                'heading': heading,
-                'content': section_content,
-                'level': current_level,
-                'chapter': chapter_num
-            })
+        sections.append({
+            'heading': heading,
+            'content': section_content,
+            'level': section_number.count('.') + 1,
+            'chapter': chapter_num
+        })
 
     return sections
 
@@ -230,22 +221,54 @@ def preprocess_extracted_section(text: str) -> str:
     Returns:
         str: The cleaned text.
     """
-    # Replaces all newline and image tag occurences with single spaces
-    text = text.replace('\n', ' ')
-    text = text.replace('<!-- image -->', ' ')
-
-    # Removes bold formatting markers (**)
+    text = text.replace('\r\n', '\n').replace('\r', '\n')
     text = text.replace('**', '')
 
-    # Normalizes all whitespace to single spaces
-    cleaned_text = ' '.join(text.split())
+    cleaned_lines = []
+    paragraph_buffer: List[str] = []
 
-    return cleaned_text
+    def flush_paragraph() -> None:
+        if paragraph_buffer:
+            cleaned_lines.append(" ".join(paragraph_buffer))
+            paragraph_buffer.clear()
+
+    for raw_line in text.split('\n'):
+        stripped = raw_line.strip()
+
+        if not stripped:
+            flush_paragraph()
+            if cleaned_lines and cleaned_lines[-1] != "":
+                cleaned_lines.append("")
+            continue
+
+        if stripped == '<!-- image -->':
+            flush_paragraph()
+            continue
+
+        if (
+            PAGE_MARKER_RE.match(stripped)
+            or HEADING_LINE_RE.match(stripped)
+            or LIST_LINE_RE.match(stripped)
+        ):
+            flush_paragraph()
+            cleaned_lines.append(stripped)
+            continue
+
+        paragraph_buffer.append(stripped)
+
+    flush_paragraph()
+
+    while cleaned_lines and cleaned_lines[0] == "":
+        cleaned_lines.pop(0)
+    while cleaned_lines and cleaned_lines[-1] == "":
+        cleaned_lines.pop()
+
+    return "\n".join(cleaned_lines)
 
 
 def main():
     # Returns all pdf files under data/chapters/
-    project_root = Path(__file__).resolve().parent.parent.parent
+    project_root = _get_runtime_project_root()
     chapters_dir = project_root / "data/chapters"
     pdfs = sorted(chapters_dir.glob("*.pdf"))
 

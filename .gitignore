@@ -1,5 +1,7 @@
 # RajShah-1 gitignore
 code-dump.txt
+AGENTS.md
+chunking.md
 
 # --- Python ---
 __pycache__/

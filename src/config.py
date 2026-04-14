@@ -7,7 +7,14 @@ from typing import Dict
 import yaml
 import pathlib
 
-from src.preprocessing.chunking import ChunkStrategy, SectionRecursiveStrategy, SectionRecursiveConfig, ChunkConfig
+from src.preprocessing.chunking import (
+    ChunkConfig,
+    ChunkStrategy,
+    SectionRecursiveConfig,
+    SectionRecursiveStrategy,
+    StructureAwareConfig,
+    StructureAwareStrategy,
+)
 
 @dataclass
 class RAGConfig:
@@ -16,6 +23,7 @@ class RAGConfig:
     chunk_mode: str = "recursive_sections"
     chunk_size: int = 2000
     chunk_overlap: int = 200
+    oversize_fallback_overlap: int = 200
 
     # retrieval + ranking
     top_k: int = 10
@@ -84,12 +92,20 @@ class RAGConfig:
                 recursive_chunk_size=self.chunk_size,
                 recursive_overlap=self.chunk_overlap
             )
-        else:
-            raise ValueError(f"Unknown chunk_mode: {self.chunk_mode}. Supported: recursive_sections")
+        if self.chunk_mode == "structure_aware":
+            return StructureAwareConfig(
+                max_chunk_chars=self.chunk_size,
+                oversize_fallback_overlap=self.oversize_fallback_overlap,
+            )
+        raise ValueError(
+            f"Unknown chunk_mode: {self.chunk_mode}. Supported: recursive_sections, structure_aware"
+        )
 
     def get_chunk_strategy(self) -> ChunkStrategy:
         if isinstance(self.chunk_config, SectionRecursiveConfig):
             return SectionRecursiveStrategy(self.chunk_config)
+        if isinstance(self.chunk_config, StructureAwareConfig):
+            return StructureAwareStrategy(self.chunk_config)
         raise ValueError(f"Unknown chunk config type: {self.chunk_config.__class__.__name__}")
 
     def get_artifacts_directory(self) -> os.PathLike:

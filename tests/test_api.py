@@ -109,6 +109,22 @@ rrf_k: 50
         
         assert isinstance(strategy, SectionRecursiveStrategy)
 
+    def test_structure_aware_chunk_config_and_strategy(self):
+        """RAGConfig wires structure_aware mode to the right config and strategy."""
+        from src.config import RAGConfig
+        from src.preprocessing.chunking import StructureAwareConfig, StructureAwareStrategy
+
+        cfg = RAGConfig(
+            chunk_mode="structure_aware",
+            chunk_size=750,
+            oversize_fallback_overlap=25,
+        )
+
+        assert isinstance(cfg.chunk_config, StructureAwareConfig)
+        assert cfg.chunk_config.max_chunk_chars == 750
+        assert cfg.chunk_config.oversize_fallback_overlap == 25
+        assert isinstance(cfg.get_chunk_strategy(), StructureAwareStrategy)
+
 
 # ====================== EnsembleRanker Tests ======================
 
@@ -300,16 +316,21 @@ class TestRetrieverInterface:
             import json
             index_path.write_text(json.dumps({"database": [1, 2], "query": [2, 3]}))
             map_path.write_text(json.dumps({"1": [0], "2": [1], "3": [2]}))
-            
-            retriever = IndexKeywordRetriever(str(index_path), str(map_path))
-            
-            assert isinstance(retriever, Retriever)
-            assert retriever.name == "index_keywords"
-            
-            chunks = ["chunk about databases", "chunk about queries", "another chunk"]
-            scores = retriever.get_scores("database query test", pool_size=3, chunks=chunks)
-            
-            assert isinstance(scores, dict)
+
+            with patch("src.retriever.nltk.download"), patch("src.retriever.WordNetLemmatizer") as mock_lemmatizer_cls:
+                mock_lemmatizer = Mock()
+                mock_lemmatizer.lemmatize.side_effect = lambda word, pos=None: word
+                mock_lemmatizer_cls.return_value = mock_lemmatizer
+
+                retriever = IndexKeywordRetriever(str(index_path), str(map_path))
+
+                assert isinstance(retriever, Retriever)
+                assert retriever.name == "index_keywords"
+                
+                chunks = ["chunk about databases", "chunk about queries", "another chunk"]
+                scores = retriever.get_scores("database query test", pool_size=3, chunks=chunks)
+                
+                assert isinstance(scores, dict)
 
 
 # ====================== Generator Tests ======================

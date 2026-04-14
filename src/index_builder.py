@@ -18,7 +18,7 @@ import faiss
 from rank_bm25 import BM25Okapi
 from src.embedder import SentenceTransformer
 
-from src.preprocessing.chunking import DocumentChunker, ChunkConfig
+from src.preprocessing.chunking import ChunkConfig, DocumentChunker
 from src.preprocessing.extraction import extract_sections_from_markdown
 
 # ----- runtime parallelism knobs (avoid oversubscription) -----
@@ -67,11 +67,11 @@ def build_index(
 
     page_to_chunk_ids = {}
     current_page = 1
-    total_chunks = 0
     heading_stack = []
+    page_pattern = re.compile(r'--- Page (\d+) ---')
 
     # Step 1: Chunk using DocumentChunker
-    for i, c in enumerate(sections):
+    for c in sections:
         # Determine current section level
         current_level = c.get('level', 1)
 
@@ -91,50 +91,27 @@ def build_index(
         full_section_path = " ".join(path_list)
         full_section_path = f"Chapter {chapter_num} " + full_section_path
 
-        # Use DocumentChunker to recursively split this section
-        sub_chunks = chunker.chunk(c['content'])
-
-        # Regex to find page markers like "--- Page 3 ---"
-        page_pattern = re.compile(r'--- Page (\d+) ---')
+        # Use DocumentChunker to split this section while preserving per-chunk metadata.
+        chunk_pieces = chunker.chunk_pieces(c['content'])
 
         # Iterate through each chunk produced from this section
-        for sub_chunk_id, sub_chunk in enumerate(sub_chunks):
-            # Track all pages this specific chunk touches
-            chunk_pages = set()
-
-            # Split the sub_chunk by page markers to see if it
-            # spans multiple pages.
-            fragments = page_pattern.split(sub_chunk)
-
-            # If there is content before the first page marker,
-            # it belongs to the current_page.
-            if fragments[0].strip():
-                page_to_chunk_ids.setdefault(current_page, set()).add(total_chunks+sub_chunk_id)
-                chunk_pages.add(current_page)
-
-            # Process the new pages found within this sub_chunk. 
-            # Step by 2 where each pair represents (page number, text after it)
-            for i in range(1, len(fragments), 2):
-                try:
-                    # Get the new page number from the marker
-                    new_page = int(fragments[i]) + 1
-
-                    # If there is text after this marker, it belongs to the new_page.
-                    if fragments[i+1].strip():
-                        page_to_chunk_ids.setdefault(new_page, set()).add(total_chunks + sub_chunk_id)
-                        chunk_pages.add(new_page)
-                    
-                    current_page = new_page
-
-                except (IndexError, ValueError):
-                    continue
+        for piece in chunk_pieces:
+            sub_chunk = piece.text
 
             # Clean sub_chunk by removing page markers
             clean_chunk = re.sub(page_pattern, '', sub_chunk).strip()
-            
-            # Skip introduction chunks for embedding
-            if c["heading"] == "Introduction":
+
+            # Skip introduction chunks for embedding and artifact creation
+            if c["heading"] == "Introduction" or not clean_chunk:
+                page_hits, current_page = map_chunk_pages(sub_chunk, current_page, page_pattern)
                 continue
+
+            chunk_id = len(all_chunks)
+
+            # Track all pages this specific chunk touches
+            chunk_pages, current_page = map_chunk_pages(sub_chunk, current_page, page_pattern)
+            for page in chunk_pages:
+                page_to_chunk_ids.setdefault(page, set()).add(chunk_id)
             
             # Prepare metadata
             meta = {
@@ -144,9 +121,11 @@ def build_index(
                 "word_len": len(clean_chunk.split()),
                 "section": c['heading'],
                 "section_path": full_section_path,
+                "chunk_unit_type": piece.metadata.unit_type,
+                "unit_heading": piece.metadata.heading,
                 "text_preview": clean_chunk[:100],
                 "page_numbers": sorted(list(chunk_pages)),
-                "chunk_id": total_chunks + sub_chunk_id
+                "chunk_id": chunk_id,
             }
 
             # Prepare chunk with prefix
@@ -161,8 +140,6 @@ def build_index(
             all_chunks.append(chunk_prefix+clean_chunk)
             sources.append(markdown_file)
             metadata.append(meta)
-
-        total_chunks += len(sub_chunks)
 
     # Convert the sets to sorted lists for a clean, predictable output
     final_map = {}
@@ -227,6 +204,28 @@ def build_index(
     print(f"Saved all index artifacts with prefix: {index_prefix}")
 
 # ------------------------ Helper functions ------------------------------
+
+def map_chunk_pages(
+    sub_chunk: str,
+    current_page: int,
+    page_pattern: re.Pattern[str],
+) -> tuple[set[int], int]:
+    chunk_pages: set[int] = set()
+    fragments = page_pattern.split(sub_chunk)
+
+    if fragments[0].strip():
+        chunk_pages.add(current_page)
+
+    for i in range(1, len(fragments), 2):
+        try:
+            new_page = int(fragments[i]) + 1
+            if fragments[i + 1].strip():
+                chunk_pages.add(new_page)
+            current_page = new_page
+        except (IndexError, ValueError):
+            continue
+
+    return chunk_pages, current_page
 
 def preprocess_for_bm25(text: str) -> list[str]:
     """

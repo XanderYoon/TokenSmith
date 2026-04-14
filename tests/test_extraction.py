@@ -2,6 +2,61 @@ from pathlib import Path
 import src.preprocessing.extraction as extraction
 import pytest
 
+def test_extract_sections_preserves_subsections_within_parent_section(tmp_path):
+    markdown = """Preface line
+
+## 1.3 View of Data
+Lead paragraph line 1
+line 2
+
+## 1.3.1 Data Models
+Subsection paragraph
+
+## 1.3.2 Database Languages
+Another subsection paragraph
+
+## 1.4 Database Users
+Next top level section paragraph
+"""
+    md_path = tmp_path / "sample.md"
+    md_path.write_text(markdown, encoding="utf-8")
+
+    sections = extraction.extract_sections_from_markdown(str(md_path))
+
+    assert len(sections) == 3
+    assert sections[0]["heading"] == "Introduction"
+    assert sections[1]["heading"] == "Section 1.3 View of Data"
+    assert sections[1]["content"].startswith("Lead paragraph line 1 line 2")
+    assert "## 1.3.1 Data Models" in sections[1]["content"]
+    assert "## 1.3.2 Database Languages" in sections[1]["content"]
+    assert sections[2]["heading"] == "Section 1.4 Database Users"
+    assert "## 1.3.1 Data Models" not in sections[2]["content"]
+
+def test_preprocess_extracted_section_preserves_structure():
+    raw = """Paragraph first line
+continues here
+
+<!-- image -->
+
+## 1.3.1 Data Models
+Subsection text line 1
+line 2
+
+--- Page 56 ---
+
+- bullet one
+- bullet two
+"""
+
+    cleaned = extraction.preprocess_extracted_section(raw)
+
+    assert "Paragraph first line continues here" in cleaned
+    assert "<!-- image -->" not in cleaned
+    assert "\n\n## 1.3.1 Data Models\n" in cleaned
+    assert "Subsection text line 1 line 2" in cleaned
+    assert "\n\n--- Page 56 ---\n" in cleaned
+    assert "\n\n- bullet one\n- bullet two" in cleaned
+
 def test_extract_no_pdfs_exits_with_error(tmp_path, monkeypatch, capsys):
     # Create temporary data/chapters/ with no PDFs
     monkeypatch.chdir(tmp_path)
