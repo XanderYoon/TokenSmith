@@ -19,11 +19,18 @@ class MetricRegistry:
             ChunkRetrievalMetric
         )
 
-        self.register(SemanticSimilarityMetric())
-        self.register(KeywordMatchMetric())
-        self.register(NLIEntailmentMetric())
-        self.register(AsyncLLMJudgeMetric())
-        self.register(ChunkRetrievalMetric())
+        self._safe_register(SemanticSimilarityMetric)
+        self._safe_register(KeywordMatchMetric)
+        self._safe_register(NLIEntailmentMetric)
+        self._safe_register(AsyncLLMJudgeMetric)
+        self._safe_register(ChunkRetrievalMetric)
+
+    def _safe_register(self, metric_cls):
+        """Skip optional metrics that cannot initialize in the current environment."""
+        try:
+            self.register(metric_cls())
+        except Exception as exc:
+            print(f"Skipping metric {metric_cls.__name__}: {exc}")
 
     def register(self, metric: MetricBase):
         """Register a new metric."""

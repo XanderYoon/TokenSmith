@@ -114,12 +114,27 @@ def tune_retrieval_weights(
     step: float = 0.05,
     minimum_weight: float = 0.05,
 ) -> TuningResult:
-    faiss_index, bm25_index, chunks, _, _, _ = load_artifacts(artifacts_dir, index_prefix)
-    retrievers = build_retrievers(
-        cfg,
-        faiss_index=faiss_index,
-        bm25_index=bm25_index,
-    )
+    artifacts = load_artifacts(artifacts_dir, index_prefix)
+    if len(artifacts) == 6:
+        faiss_index, bm25_index, chunks, _, _, graph_artifact = artifacts
+    else:
+        faiss_index, bm25_index, chunks, _, _ = artifacts
+        graph_artifact = None
+    try:
+        retrievers = build_retrievers(
+            cfg,
+            faiss_index=faiss_index,
+            bm25_index=bm25_index,
+            graph_artifact=graph_artifact,
+        )
+    except TypeError as exc:
+        if "graph_artifact" not in str(exc):
+            raise
+        retrievers = build_retrievers(
+            cfg,
+            faiss_index=faiss_index,
+            bm25_index=bm25_index,
+        )
     raw_scores_by_query = {
         benchmark.benchmark_id: {
             retriever.name: retriever.get_scores(benchmark.question, cfg.num_candidates, chunks)
