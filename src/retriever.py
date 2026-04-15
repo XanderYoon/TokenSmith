@@ -36,7 +36,15 @@ def _get_embedder(model_name: str) -> CachedEmbedder:
 
 # -------------------------- Read artifacts -------------------------------
 
-def load_artifacts(artifacts_dir: os.PathLike, index_prefix: str) -> Tuple[faiss.Index, List[str], List[str], Any]:
+def _load_pickle(path: pathlib.Path) -> Any:
+    with open(path, "rb") as handle:
+        return pickle.load(handle)
+
+
+def load_artifacts(
+    artifacts_dir: os.PathLike,
+    index_prefix: str,
+) -> Tuple[faiss.Index, Any, List[str], List[str], Any]:
     """
     Loads:
       - FAISS index: {index_prefix}.faiss
@@ -44,11 +52,22 @@ def load_artifacts(artifacts_dir: os.PathLike, index_prefix: str) -> Tuple[faiss
       - sources:     {index_prefix}_sources.pkl
     """
     artifacts_dir = pathlib.Path(artifacts_dir)
-    faiss_index = faiss.read_index(str(artifacts_dir / f"{index_prefix}.faiss"))
-    bm25_index  = pickle.load(open(artifacts_dir / f"{index_prefix}_bm25.pkl", "rb"))
-    chunks      = pickle.load(open(artifacts_dir / f"{index_prefix}_chunks.pkl", "rb"))
-    sources     = pickle.load(open(artifacts_dir / f"{index_prefix}_sources.pkl", "rb"))
-    metadata = pickle.load(open(artifacts_dir / f"{index_prefix}_meta.pkl", "rb"))
+    required_paths = {
+        "faiss": artifacts_dir / f"{index_prefix}.faiss",
+        "bm25": artifacts_dir / f"{index_prefix}_bm25.pkl",
+        "chunks": artifacts_dir / f"{index_prefix}_chunks.pkl",
+        "sources": artifacts_dir / f"{index_prefix}_sources.pkl",
+        "meta": artifacts_dir / f"{index_prefix}_meta.pkl",
+    }
+    missing = [str(path) for path in required_paths.values() if not path.exists()]
+    if missing:
+        raise FileNotFoundError(f"Missing retrieval artifacts: {', '.join(missing)}")
+
+    faiss_index = faiss.read_index(str(required_paths["faiss"]))
+    bm25_index  = _load_pickle(required_paths["bm25"])
+    chunks      = _load_pickle(required_paths["chunks"])
+    sources     = _load_pickle(required_paths["sources"])
+    metadata = _load_pickle(required_paths["meta"])
 
     return faiss_index, bm25_index, chunks, sources, metadata
 
@@ -76,6 +95,37 @@ def get_page_numbers(chunk_indices: list[int], metadata: list[dict]) -> dict[int
 def filter_retrieved_chunks(cfg: RAGConfig, chunks, ordered):
     topk_idxs = ordered[:cfg.top_k]
     return topk_idxs
+
+
+def get_active_retriever_names(cfg: RAGConfig) -> List[str]:
+    return cfg.get_enabled_retriever_names()
+
+
+def build_retrievers(
+    cfg: RAGConfig,
+    *,
+    faiss_index: Optional[faiss.Index] = None,
+    bm25_index: Optional[Any] = None,
+) -> List["Retriever"]:
+    retrievers: List[Retriever] = []
+    enabled = set(get_active_retriever_names(cfg))
+
+    if "faiss" in enabled:
+        if faiss_index is None:
+            raise ValueError("FAISS retriever is enabled but no FAISS index was loaded")
+        retrievers.append(FAISSRetriever(faiss_index, cfg.embed_model))
+
+    if "bm25" in enabled:
+        if bm25_index is None:
+            raise ValueError("BM25 retriever is enabled but no BM25 index was loaded")
+        retrievers.append(BM25Retriever(bm25_index))
+
+    if "index_keywords" in enabled:
+        retrievers.append(
+            IndexKeywordRetriever(cfg.extracted_index_path, cfg.page_to_chunk_map_path)
+        )
+
+    return retrievers
 
 # -------------------------- Retrieval core ------------------------------
 
@@ -159,7 +209,6 @@ class BM25Retriever(Retriever):
 
         return scores
 
-
 class IndexKeywordRetriever(Retriever):
     name = "index_keywords"
     
@@ -172,7 +221,6 @@ class IndexKeywordRetriever(Retriever):
             page_to_chunk_map_path: Path to page_to_chunk_map.json (page -> chunk IDs)
         """
         import json
-        nltk.download('wordnet', quiet=True)
         self.page_to_chunk_map = {}
         
         # Load and normalize index: lemmatize phrases as units
@@ -250,14 +298,18 @@ class IndexKeywordRetriever(Retriever):
             for chunk_id, hit_count in chunk_hit_counts.items()
         }
         
-        return scores
+        sorted_hits = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
+        return dict(sorted_hits[:pool_size])
     
     @staticmethod
     def _lemmatize_word(word: str, lemmatizer) -> str:
         """Lemmatize a word, trying noun then verb."""
-        lemma = lemmatizer.lemmatize(word, pos='n')
-        if lemma == word:
-            lemma = lemmatizer.lemmatize(word, pos='v')
+        try:
+            lemma = lemmatizer.lemmatize(word, pos='n')
+            if lemma == word:
+                lemma = lemmatizer.lemmatize(word, pos='v')
+        except LookupError:
+            return word
         return lemma
     
     @staticmethod

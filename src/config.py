@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import Dict
+from typing import Dict, List, Optional
 
 import yaml
 import pathlib
@@ -32,8 +32,14 @@ class RAGConfig:
     ensemble_method: str = "rrf"
     rrf_k: int  = 60
     ranker_weights: Dict[str, float] = field(
-        default_factory=lambda: {"faiss": 1.0, "bm25": 0.0, "index_keywords": 0.0}
+        default_factory=lambda: {
+            "faiss": 0.55,
+            "bm25": 0.3,
+            "index_keywords": 0.15,
+        }
     )
+    enabled_retrievers: Optional[Dict[str, bool]] = None
+    score_normalization: str = "minmax"
     rerank_mode: str = ""
     rerank_top_k: int = 5
 
@@ -77,9 +83,20 @@ class RAGConfig:
         assert self.top_k > 0, "top_k must be > 0"
         assert self.num_candidates >= self.top_k, "num_candidates must be >= top_k"
         assert self.ensemble_method.lower() in {"linear","weighted","rrf"}
-        if self.ensemble_method.lower() in {"linear","weighted"}:
-            s = sum(self.ranker_weights.values()) or 1.0
-            self.ranker_weights = {k: v/s for k, v in self.ranker_weights.items()}
+        self.ranker_weights = {str(k): float(v) for k, v in self.ranker_weights.items()}
+        self.enabled_retrievers = self._resolve_enabled_retrievers(
+            enabled_retrievers=self.enabled_retrievers,
+            weights=self.ranker_weights,
+        )
+        active_weights = self.get_active_ranker_weights()
+        assert active_weights, "At least one retriever must be enabled with a positive weight"
+        if self.ensemble_method.lower() in {"linear", "weighted", "rrf"}:
+            total_weight = sum(active_weights.values())
+            assert total_weight > 0, "Active retriever weights must sum to a positive value"
+            self.ranker_weights = {
+                name: (weight / total_weight if name in active_weights else float(weight))
+                for name, weight in self.ranker_weights.items()
+            }
         self.chunk_config = self.get_chunk_config()
         self.chunk_config.validate()
 
@@ -114,6 +131,39 @@ class RAGConfig:
         strategy_dir = pathlib.Path("index", strategy.artifact_folder_name())
         strategy_dir.mkdir(parents=True, exist_ok=True)
         return strategy_dir
+
+    def get_enabled_retriever_names(self) -> List[str]:
+        return [name for name, enabled in self.enabled_retrievers.items() if enabled]
+
+    def get_active_ranker_weights(self) -> Dict[str, float]:
+        return {
+            name: float(self.ranker_weights.get(name, 0.0))
+            for name in self.get_enabled_retriever_names()
+            if float(self.ranker_weights.get(name, 0.0)) > 0
+        }
+
+    @staticmethod
+    def _resolve_enabled_retrievers(
+        enabled_retrievers: Optional[Dict[str, bool]],
+        weights: Dict[str, float],
+    ) -> Dict[str, bool]:
+        supported = ("faiss", "bm25", "index_keywords")
+        resolved = {name: False for name in supported}
+
+        if enabled_retrievers is not None:
+            for name, enabled in enabled_retrievers.items():
+                if name not in resolved:
+                    raise ValueError(f"Unknown retriever '{name}'. Supported: {supported}")
+                resolved[name] = bool(enabled)
+            return resolved
+
+        for name in supported:
+            resolved[name] = float(weights.get(name, 0.0)) > 0.0
+
+        if not any(resolved.values()) and "faiss" in weights:
+            resolved["faiss"] = True
+
+        return resolved
     
     def get_config_state(self) -> None:
         """Returns dict of all config parameters except chunk_config """

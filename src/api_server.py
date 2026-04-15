@@ -9,7 +9,6 @@ import re, json
 import traceback
 from uuid import uuid4
 from copy import deepcopy
-from contextlib import asynccontextmanager
 from typing import Dict, List, Optional
 import traceback
 import os
@@ -35,7 +34,7 @@ from src.feedback_store import (
 )
 from src.instrumentation.logging import get_logger
 from src.ranking.ranker import EnsembleRanker
-from src.retriever import filter_retrieved_chunks, BM25Retriever, FAISSRetriever, IndexKeywordRetriever, get_page_numbers, load_artifacts
+from src.retriever import build_retrievers, get_page_numbers, load_artifacts
 from src.user_feedback_model import TopicExtractor, estimate_difficulty
 
 # Constants
@@ -97,6 +96,8 @@ def _resolve_config_path() -> pathlib.Path:
 
 
 def _ensure_initialized():
+    if not all([_config, _artifacts, _retrievers, _ranker]):
+        _initialize_runtime_state()
     if not all([_config, _artifacts, _retrievers, _ranker]):
         raise HTTPException(
             status_code=503,
@@ -166,9 +167,8 @@ def _retrieve_and_rank(query: str, top_k: Optional[int] = None):
 
     return ordered_ids, ordered_scores
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Initialize artifacts on startup."""
+def _initialize_runtime_state():
+    """Initialize artifacts for request handling."""
     global _artifacts, _retrievers, _ranker, _config, _logger, _topic_extractor
 
     config_path = _resolve_config_path()
@@ -191,21 +191,18 @@ async def lifespan(app: FastAPI):
             "meta": metadata,
         }
 
-        _retrievers = [
-            FAISSRetriever(faiss_index, _config.embed_model),
-            BM25Retriever(bm25_index),
-        ]
-        
-        # Add index keyword retriever if weight > 0
-        if _config.ranker_weights.get("index_keywords", 0) > 0:
-            _retrievers.append(
-                IndexKeywordRetriever(_config.extracted_index_path, _config.page_to_chunk_map_path)
-            )
+        _retrievers = build_retrievers(
+            _config,
+            faiss_index=faiss_index,
+            bm25_index=bm25_index,
+        )
 
         _ranker = EnsembleRanker(
             ensemble_method=_config.ensemble_method,
-            weights=_config.ranker_weights,
+            weights=_config.get_active_ranker_weights(),
+            active_retrievers=_config.get_enabled_retriever_names(),
             rrf_k=int(_config.rrf_k),
+            normalization=_config.score_normalization,
         )
 
         init_feedback_db()
@@ -222,9 +219,13 @@ async def lifespan(app: FastAPI):
         print(f"Warning: Could not load artifacts: {exc}")
         print("   Run indexing first or check your configuration")
 
-    yield
 
+def _shutdown_runtime_state():
     print("🔄 Shutting down TokenSmith API...")
+
+
+def lifespan(app: FastAPI):
+    return None
 
 
 # Create FastAPI app
@@ -232,7 +233,6 @@ app = FastAPI(
     title="TokenSmith API",
     description="REST API for TokenSmith RAG chat functionality",
     version="1.0.0",
-    lifespan=lifespan
 )
 
 # Add CORS middleware

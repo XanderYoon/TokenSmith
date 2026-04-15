@@ -2,8 +2,10 @@ embed_model: "models/Qwen3-Embedding-4B-Q5_K_M.gguf"
 top_k: 10
 num_candidates: 50
 ensemble_method: "rrf"
-ranker_weights: {"faiss":1,"bm25":0,"index_keywords":0}
+ranker_weights: {"faiss":0.55,"bm25":0.3,"index_keywords":0.15}
+enabled_retrievers: {"faiss": true, "bm25": true, "index_keywords": true}
 rrf_k: 60
+score_normalization: "minmax"
 max_gen_tokens: 400
 chunk_mode : "recursive_sections"
 gen_model: "models/qwen2.5-3b-instruct-q8_0.gguf"

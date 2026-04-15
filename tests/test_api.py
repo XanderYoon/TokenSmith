@@ -67,6 +67,18 @@ class TestRAGConfig:
         
         total = sum(cfg.ranker_weights.values())
         assert abs(total - 1.0) < 1e-6
+
+    def test_legacy_faiss_bm25_config_disables_new_sources(self):
+        """Configs that only specify FAISS/BM25 remain valid."""
+        from src.config import RAGConfig
+
+        cfg = RAGConfig(
+            ranker_weights={"faiss": 0.7, "bm25": 0.3},
+        )
+
+        assert cfg.enabled_retrievers["faiss"] is True
+        assert cfg.enabled_retrievers["bm25"] is True
+        assert cfg.enabled_retrievers["index_keywords"] is False
     
     def test_from_yaml(self, tmp_path):
         """RAGConfig loads from YAML correctly."""
@@ -143,6 +155,7 @@ class TestEnsembleRanker:
         
         assert ranker.ensemble_method == "rrf"
         assert ranker.rrf_k == 60
+        assert ranker.active_retrievers == ["faiss", "bm25"]
     
     def test_initialization_invalid_weights(self):
         """EnsembleRanker rejects weights not summing to 1.0."""
@@ -193,9 +206,6 @@ class TestEnsembleRanker:
             "bm25": {0: 0.3, 1: 0.8, 2: 0.9}
         }
         
-        # Patch _normalize to use normalize (the actual static method)
-        ranker._normalize = EnsembleRanker.normalize
-        
         ordered_idxs, ordered_score = ranker.rank(raw_scores)
 
         assert isinstance(ordered_idxs, list)
@@ -204,6 +214,26 @@ class TestEnsembleRanker:
         assert isinstance(ordered_score, list)
         assert len(ordered_score) == 3
         assert all(isinstance(score, float) for score in ordered_score)
+
+    def test_rank_requires_scores_for_active_retrievers(self):
+        """Ranker fails clearly when an enabled source is missing from raw_scores."""
+        from src.ranking.ranker import EnsembleRanker
+
+        ranker = EnsembleRanker(
+            ensemble_method="rrf",
+            weights={"faiss": 0.5, "bm25": 0.5},
+            active_retrievers=["faiss", "bm25"],
+        )
+
+        with pytest.raises(ValueError, match="Missing score dictionaries"):
+            ranker.rank({"faiss": {0: 1.0}})
+
+    def test_linear_constant_scores_still_contribute(self):
+        """Constant-score retrievers retain non-zero normalized contribution."""
+        from src.ranking.ranker import EnsembleRanker
+
+        normalized = EnsembleRanker.normalize({0: 2.0, 1: 2.0})
+        assert normalized == {0: 1.0, 1: 1.0}
 
         
         
@@ -331,7 +361,6 @@ class TestRetrieverInterface:
                 scores = retriever.get_scores("database query test", pool_size=3, chunks=chunks)
                 
                 assert isinstance(scores, dict)
-
 
 # ====================== Generator Tests ======================
 

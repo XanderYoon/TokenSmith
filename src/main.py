@@ -19,10 +19,8 @@ from src.ranking.ranker import EnsembleRanker
 from src.preprocessing.chunking import DocumentChunker
 from src.query_enhancement import generate_hypothetical_document, contextualize_query
 from src.retriever import (
+    build_retrievers,
     filter_retrieved_chunks, 
-    BM25Retriever, 
-    FAISSRetriever, 
-    IndexKeywordRetriever, 
     get_page_numbers, 
     load_artifacts
 )
@@ -160,31 +158,24 @@ def get_answer(
         # Capture chunk info if in test mode
         if is_test_mode:
             # Compute individual ranker ranks
-            faiss_scores = raw_scores.get("faiss", {})
-            bm25_scores = raw_scores.get("bm25", {})
-            index_scores = raw_scores.get("index_keywords", {})
-            
-            faiss_ranked = sorted(faiss_scores.keys(), key=lambda i: faiss_scores[i], reverse=True)
-            bm25_ranked = sorted(bm25_scores.keys(), key=lambda i: bm25_scores[i], reverse=True)
-            index_ranked = sorted(index_scores.keys(), key=lambda i: index_scores[i], reverse=True)
-            
-            faiss_ranks = {idx: rank + 1 for rank, idx in enumerate(faiss_ranked)}
-            bm25_ranks = {idx: rank + 1 for rank, idx in enumerate(bm25_ranked)}
-            index_ranks = {idx: rank + 1 for rank, idx in enumerate(index_ranked)}
+            per_source_ranks = {}
+            for retriever_name, score_dict in raw_scores.items():
+                ranked_ids = sorted(score_dict.items(), key=lambda item: (-item[1], item[0]))
+                per_source_ranks[retriever_name] = {
+                    idx: rank + 1 for rank, (idx, _) in enumerate(ranked_ids)
+                }
             
             chunks_info = []
             for rank, idx in enumerate(topk_idxs, 1):
-                chunks_info.append({
+                chunk_info = {
                     "rank": rank,
                     "chunk_id": idx,
                     "content": chunks[idx],
-                    "faiss_score": faiss_scores.get(idx, 0),
-                    "faiss_rank": faiss_ranks.get(idx, 0),
-                    "bm25_score": bm25_scores.get(idx, 0),
-                    "bm25_rank": bm25_ranks.get(idx, 0),
-                    "index_score": index_scores.get(idx, 0),
-                    "index_rank": index_ranks.get(idx, 0),
-                })
+                }
+                for retriever_name, score_dict in raw_scores.items():
+                    chunk_info[f"{retriever_name}_score"] = score_dict.get(idx, 0.0)
+                    chunk_info[f"{retriever_name}_rank"] = per_source_ranks[retriever_name].get(idx, 0)
+                chunks_info.append(chunk_info)
 
         # Step 3: Final re-ranking
         ranked_chunks = rerank(question, ranked_chunks, mode=cfg.rerank_mode, top_n=cfg.rerank_top_k)
@@ -287,11 +278,19 @@ def run_chat_session(args: argparse.Namespace, cfg: RAGConfig):
         artifacts_dir = cfg.get_artifacts_directory()
         faiss_idx, bm25_idx, chunks, sources, meta = load_artifacts(artifacts_dir, args.index_prefix)
         print(f"Loaded {len(chunks)} chunks and {len(sources)} sources from artifacts.")
-        retrievers = [FAISSRetriever(faiss_idx, cfg.embed_model), BM25Retriever(bm25_idx)]
-        if cfg.ranker_weights.get("index_keywords", 0) > 0:
-            retrievers.append(IndexKeywordRetriever(cfg.extracted_index_path, cfg.page_to_chunk_map_path))
+        retrievers = build_retrievers(
+            cfg,
+            faiss_index=faiss_idx,
+            bm25_index=bm25_idx,
+        )
         
-        ranker = EnsembleRanker(ensemble_method=cfg.ensemble_method, weights=cfg.ranker_weights, rrf_k=int(cfg.rrf_k))
+        ranker = EnsembleRanker(
+            ensemble_method=cfg.ensemble_method,
+            weights=cfg.get_active_ranker_weights(),
+            active_retrievers=cfg.get_enabled_retriever_names(),
+            rrf_k=int(cfg.rrf_k),
+            normalization=cfg.score_normalization,
+        )
         print("Loaded retrievers and initialized ranker.")
         artifacts = {"chunks": chunks, "sources": sources, "retrievers": retrievers, "ranker": ranker, "meta": meta}
     except Exception as e:

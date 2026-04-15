@@ -176,7 +176,7 @@ def get_tokensmith_answer(question, config, golden_chunks=None):
     from src.main import get_answer
     from src.instrumentation.logging import get_logger
     from src.config import RAGConfig
-    from src.retriever import BM25Retriever, FAISSRetriever, IndexKeywordRetriever, load_artifacts
+    from src.retriever import build_retrievers, load_artifacts
     from src.ranking.ranker import EnsembleRanker
     import argparse
     
@@ -229,21 +229,18 @@ def get_tokensmith_answer(question, config, golden_chunks=None):
         index_prefix=config["index_prefix"]
     )
 
-    retrievers = [
-        FAISSRetriever(faiss_index, cfg.embed_model),
-        BM25Retriever(bm25_index)
-    ]
-    
-    # Add index keyword retriever if weight > 0
-    if cfg.ranker_weights.get("index_keywords", 0) > 0:
-        retrievers.append(
-            IndexKeywordRetriever(cfg.extracted_index_path, cfg.page_to_chunk_map_path)
-        )
+    retrievers = build_retrievers(
+        cfg,
+        faiss_index=faiss_index,
+        bm25_index=bm25_index,
+    )
     
     ranker = EnsembleRanker(
         ensemble_method=cfg.ensemble_method,
-        weights=cfg.ranker_weights,
-        rrf_k=int(cfg.rrf_k)
+        weights=cfg.get_active_ranker_weights(),
+        active_retrievers=cfg.get_enabled_retriever_names(),
+        rrf_k=int(cfg.rrf_k),
+        normalization=cfg.score_normalization,
     )
     
     # Package artifacts for reuse
