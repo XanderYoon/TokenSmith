@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 import argparse
 from typing import List, Dict, Any
 
+from src.graph import GraphArtifact, GraphEdge, GraphNode
 from src.config import RAGConfig
 from src.ranking.ranker import EnsembleRanker
 from src.instrumentation.logging import RunLogger
@@ -157,3 +158,109 @@ def test_end_to_end_pipeline_stubbed():
         assert any("Python is a programming language." in c for c in passed_chunks)
         assert any("Machine learning uses statistics." in c for c in passed_chunks)
 
+
+@pytest.mark.unit
+@pytest.mark.filterwarnings("ignore:.*SwigPyPacked.*")
+@pytest.mark.filterwarnings("ignore:.*SwigPyObject.*")
+@pytest.mark.filterwarnings("ignore:.*swigvarlink.*")
+def test_end_to_end_pipeline_with_graph_signal():
+    from src.main import get_answer
+
+    cfg = RAGConfig(
+        top_k=2,
+        num_candidates=5,
+        ensemble_method="linear",
+        ranker_weights={
+            "faiss": 0.45,
+            "bm25": 0.25,
+            "index_keywords": 0.15,
+            "graph": 0.15,
+        },
+        enabled_retrievers={
+            "faiss": True,
+            "bm25": True,
+            "index_keywords": True,
+            "graph": True,
+        },
+        chunk_mode="recursive_sections",
+        use_hyde=False,
+        disable_chunks=False,
+        rerank_mode="none",
+    )
+
+    args = argparse.Namespace(
+        system_prompt_mode="baseline",
+        index_prefix="test_index",
+    )
+
+    chunks = [
+        "Chunk 0: Database schema overview.",
+        "Chunk 1: Foreign key references primary key.",
+        "Chunk 2: Primary key uniquely identifies tuples.",
+        "Chunk 3: Unrelated networking content.",
+    ]
+    sources = ["doc1", "doc1", "doc1", "doc2"]
+
+    retrievers = [
+        MockRetriever("faiss", {0: 0.9, 1: 0.5, 2: 0.2}),
+        MockRetriever("bm25", {1: 1.0, 2: 0.8}),
+        MockRetriever("index_keywords", {1: 1.0}),
+        MockRetriever("graph", {1: 1.0, 2: 0.7}),
+    ]
+
+    ranker = EnsembleRanker(
+        ensemble_method="linear",
+        weights={"faiss": 0.45, "bm25": 0.25, "index_keywords": 0.15, "graph": 0.15},
+        active_retrievers=["faiss", "bm25", "index_keywords", "graph"],
+    )
+
+    artifacts = {
+        "chunks": chunks,
+        "sources": sources,
+        "retrievers": retrievers,
+        "ranker": ranker,
+        "meta": [{"page_numbers": [1]} for _ in chunks],
+        "graph": GraphArtifact(
+            document_id="test_index",
+            nodes=[
+                GraphNode(node_id="entity:foreign-key", label="foreign key", chunk_ids=[1]),
+                GraphNode(node_id="entity:primary-key", label="primary key", chunk_ids=[2]),
+            ],
+            edges=[
+                GraphEdge(
+                    edge_id="edge:foreign-key-references-primary-key",
+                    source_id="entity:foreign-key",
+                    target_id="entity:primary-key",
+                    relation="references",
+                    chunk_ids=[1],
+                )
+            ],
+        ),
+    }
+
+    def mock_stream_generator():
+        yield "Foreign keys reference "
+        yield "primary keys."
+
+    with patch("src.main.answer", side_effect=lambda *a, **k: mock_stream_generator()) as mock_answer_func:
+        logger = RunLogger()
+        console = MagicMock()
+        question = "How does a foreign key reference a primary key?"
+
+        ans, chunks_info, _ = get_answer(
+            question=question,
+            cfg=cfg,
+            args=args,
+            logger=logger,
+            console=console,
+            artifacts=artifacts,
+            is_test_mode=True,
+        )
+
+        assert ans == "Foreign keys reference primary keys."
+        assert len(chunks_info) == 2
+        assert chunks_info[0]["chunk_id"] == 1
+        assert chunks_info[0]["graph_score"] > 0.0
+        assert all("graph_score" in info for info in chunks_info)
+        assert any(info["graph_score"] > 0.0 for info in chunks_info)
+        assert mock_answer_func.call_count == 1

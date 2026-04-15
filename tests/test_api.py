@@ -34,6 +34,9 @@ class TestRAGConfig:
         assert cfg.num_candidates >= cfg.top_k
         assert cfg.ensemble_method in {"linear", "weighted", "rrf"}
         assert cfg.chunk_config is not None
+        assert "graph" in cfg.ranker_weights
+        assert cfg.ranker_weights["graph"] > 0.0
+        assert cfg.enabled_retrievers["graph"] is True
     
     def test_validation_top_k_positive(self):
         """RAGConfig rejects top_k <= 0."""
@@ -79,6 +82,32 @@ class TestRAGConfig:
         assert cfg.enabled_retrievers["faiss"] is True
         assert cfg.enabled_retrievers["bm25"] is True
         assert cfg.enabled_retrievers["index_keywords"] is False
+        assert cfg.enabled_retrievers["graph"] is False
+
+    def test_graph_retriever_can_be_enabled_explicitly(self):
+        """Graph retriever is supported as a first-class config option."""
+        from src.config import RAGConfig
+
+        cfg = RAGConfig(
+            ranker_weights={
+                "faiss": 0.5,
+                "bm25": 0.25,
+                "index_keywords": 0.1,
+                "graph": 0.15,
+            },
+            enabled_retrievers={
+                "faiss": True,
+                "bm25": True,
+                "index_keywords": True,
+                "graph": True,
+            },
+            graph_artifact_path="index/structure_aware/textbook_index_graph.json",
+        )
+
+        assert cfg.enabled_retrievers["graph"] is True
+        assert "graph" in cfg.get_enabled_retriever_names()
+        assert cfg.get_active_ranker_weights()["graph"] > 0.0
+        assert cfg.graph_artifact_path == "index/structure_aware/textbook_index_graph.json"
     
     def test_from_yaml(self, tmp_path):
         """RAGConfig loads from YAML correctly."""
@@ -651,6 +680,7 @@ class TestLoadArtifacts:
     def test_load_artifacts_returns_tuple(self):
         """load_artifacts returns expected tuple structure."""
         from src.retriever import load_artifacts
+        from src.graph import GraphArtifact, GraphNode, save_graph_artifact
         import pickle
         import faiss
         
@@ -683,9 +713,17 @@ class TestLoadArtifacts:
             meta = [{"page": 1}, {"page": 2}, {"page": 3}]
             with open(f"{tmpdir}/{prefix}_meta.pkl", "wb") as f:
                 pickle.dump(meta, f)
+
+            save_graph_artifact(
+                f"{tmpdir}/{prefix}_graph.json",
+                GraphArtifact(
+                    document_id=prefix,
+                    nodes=[GraphNode(node_id="entity:test", label="test", chunk_ids=[0])],
+                ),
+            )
             
             # Load and verify
-            faiss_idx, bm25_idx, loaded_chunks, loaded_sources, loaded_meta = load_artifacts(
+            faiss_idx, bm25_idx, loaded_chunks, loaded_sources, loaded_meta, loaded_graph = load_artifacts(
                 tmpdir, prefix
             )
             
@@ -694,6 +732,34 @@ class TestLoadArtifacts:
             assert loaded_chunks == chunks
             assert loaded_sources == sources
             assert loaded_meta == meta
+            assert loaded_graph is not None
+            assert loaded_graph.document_id == prefix
+
+    def test_load_artifacts_requires_graph_when_enabled(self):
+        """load_artifacts fails clearly when graph retrieval is enabled but artifact is missing."""
+        from src.retriever import load_artifacts
+        import pickle
+        import faiss
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            prefix = "test_index"
+
+            dim = 8
+            index = faiss.IndexFlatL2(dim)
+            index.add(np.random.random((2, dim)).astype("float32"))
+            faiss.write_index(index, f"{tmpdir}/{prefix}.faiss")
+
+            with open(f"{tmpdir}/{prefix}_bm25.pkl", "wb") as f:
+                pickle.dump({"type": "bm25_placeholder"}, f)
+            with open(f"{tmpdir}/{prefix}_chunks.pkl", "wb") as f:
+                pickle.dump(["chunk1"], f)
+            with open(f"{tmpdir}/{prefix}_sources.pkl", "wb") as f:
+                pickle.dump(["source1"], f)
+            with open(f"{tmpdir}/{prefix}_meta.pkl", "wb") as f:
+                pickle.dump([{"page": 1}], f)
+
+            with pytest.raises(FileNotFoundError, match="Missing graph artifact"):
+                load_artifacts(tmpdir, prefix, require_graph=True)
 
 
 # ====================== Filter Retrieved Chunks Tests ======================

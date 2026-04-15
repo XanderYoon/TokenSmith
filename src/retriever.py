@@ -18,6 +18,7 @@ from nltk.stem import WordNetLemmatizer
 import faiss
 import numpy as np
 from src.embedder import CachedEmbedder
+from src.graph import GraphArtifact, GraphQueryScorer, load_graph_artifact
 
 from src.config import RAGConfig
 from src.index_builder import preprocess_for_bm25
@@ -44,12 +45,16 @@ def _load_pickle(path: pathlib.Path) -> Any:
 def load_artifacts(
     artifacts_dir: os.PathLike,
     index_prefix: str,
-) -> Tuple[faiss.Index, Any, List[str], List[str], Any]:
+    *,
+    require_graph: bool = False,
+    graph_artifact_path: Optional[os.PathLike] = None,
+) -> Tuple[faiss.Index, Any, List[str], List[str], Any, Optional[GraphArtifact]]:
     """
     Loads:
       - FAISS index: {index_prefix}.faiss
       - chunks:      {index_prefix}_chunks.pkl
       - sources:     {index_prefix}_sources.pkl
+      - graph:       {index_prefix}_graph.json when present or required
     """
     artifacts_dir = pathlib.Path(artifacts_dir)
     required_paths = {
@@ -68,8 +73,18 @@ def load_artifacts(
     chunks      = _load_pickle(required_paths["chunks"])
     sources     = _load_pickle(required_paths["sources"])
     metadata = _load_pickle(required_paths["meta"])
+    graph_path = (
+        pathlib.Path(graph_artifact_path)
+        if graph_artifact_path is not None
+        else artifacts_dir / f"{index_prefix}_graph.json"
+    )
+    graph_artifact: Optional[GraphArtifact] = None
+    if graph_path.exists():
+        graph_artifact = load_graph_artifact(graph_path)
+    elif require_graph:
+        raise FileNotFoundError(f"Missing graph artifact: {graph_path}")
 
-    return faiss_index, bm25_index, chunks, sources, metadata
+    return faiss_index, bm25_index, chunks, sources, metadata, graph_artifact
 
 
 # -------------------------- Helper to get page nums for chunks -------------------------------
@@ -106,6 +121,7 @@ def build_retrievers(
     *,
     faiss_index: Optional[faiss.Index] = None,
     bm25_index: Optional[Any] = None,
+    graph_artifact: Optional[GraphArtifact] = None,
 ) -> List["Retriever"]:
     retrievers: List[Retriever] = []
     enabled = set(get_active_retriever_names(cfg))
@@ -123,6 +139,16 @@ def build_retrievers(
     if "index_keywords" in enabled:
         retrievers.append(
             IndexKeywordRetriever(cfg.extracted_index_path, cfg.page_to_chunk_map_path)
+        )
+
+    if "graph" in enabled:
+        if graph_artifact is None:
+            raise ValueError("Graph retriever is enabled but no graph artifact was loaded")
+        retrievers.append(
+            GraphRetriever(
+                graph_artifact,
+                use_aliases=cfg.graph_node_alias_expansion,
+            )
         )
 
     return retrievers
@@ -331,3 +357,19 @@ class IndexKeywordRetriever(Retriever):
                 continue
             keywords.append(IndexKeywordRetriever._lemmatize_word(cleaned, lemmatizer))
         return keywords
+
+
+class GraphRetriever(Retriever):
+    name = "graph"
+
+    def __init__(self, artifact: GraphArtifact, *, use_aliases: bool = True):
+        self.artifact = artifact
+        self.scorer = GraphQueryScorer(artifact, use_aliases=use_aliases)
+
+    def get_scores(self, query: str, pool_size: int, chunks: List[str]) -> Dict[int, float]:
+        scores = self.scorer.score_chunks(query, pool_size)
+        return {
+            chunk_id: score
+            for chunk_id, score in scores.items()
+            if 0 <= chunk_id < len(chunks)
+        }

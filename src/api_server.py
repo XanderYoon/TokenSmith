@@ -180,21 +180,25 @@ def _initialize_runtime_state():
 
     try:
         artifacts_dir = _config.get_artifacts_directory()
-        faiss_index, bm25_index, chunks, sources, metadata = load_artifacts(
+        faiss_index, bm25_index, chunks, sources, metadata, graph_artifact = load_artifacts(
             artifacts_dir=artifacts_dir,
-            index_prefix=INDEX_PREFIX
+            index_prefix=INDEX_PREFIX,
+            require_graph=_config.enabled_retrievers.get("graph", False),
+            graph_artifact_path=_config.graph_artifact_path,
         )
 
         _artifacts = {
             "chunks": chunks,
             "sources": sources,
             "meta": metadata,
+            "graph": graph_artifact,
         }
 
         _retrievers = build_retrievers(
             _config,
             faiss_index=faiss_index,
             bm25_index=bm25_index,
+            graph_artifact=graph_artifact,
         )
 
         _ranker = EnsembleRanker(

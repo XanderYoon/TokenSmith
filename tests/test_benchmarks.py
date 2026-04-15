@@ -224,7 +224,7 @@ def get_tokensmith_answer(question, config, golden_chunks=None):
 
     # Run the query through the main pipeline
     artifacts_dir = cfg.get_artifacts_directory()
-    faiss_index, bm25_index, chunks, sources, metadata = load_artifacts(
+    faiss_index, bm25_index, chunks, sources, metadata, _ = load_artifacts(
         artifacts_dir=artifacts_dir, 
         index_prefix=config["index_prefix"]
     )

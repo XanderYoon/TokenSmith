@@ -33,9 +33,10 @@ class RAGConfig:
     rrf_k: int  = 60
     ranker_weights: Dict[str, float] = field(
         default_factory=lambda: {
-            "faiss": 0.55,
-            "bm25": 0.3,
+            "faiss": 0.45,
+            "bm25": 0.25,
             "index_keywords": 0.15,
+            "graph": 0.15,
         }
     )
     enabled_retrievers: Optional[Dict[str, bool]] = None
@@ -67,6 +68,8 @@ class RAGConfig:
     use_indexed_chunks: bool = False
     extracted_index_path: os.PathLike = "data/extracted_index.json"
     page_to_chunk_map_path: os.PathLike = "index/sections/textbook_index_page_to_chunk_map.json"
+    graph_artifact_path: Optional[os.PathLike] = None
+    graph_node_alias_expansion: bool = True
 
     # user feedback modeling
     enable_topic_extraction: bool = False
@@ -147,7 +150,7 @@ class RAGConfig:
         enabled_retrievers: Optional[Dict[str, bool]],
         weights: Dict[str, float],
     ) -> Dict[str, bool]:
-        supported = ("faiss", "bm25", "index_keywords")
+        supported = ("faiss", "bm25", "index_keywords", "graph")
         resolved = {name: False for name in supported}
 
         if enabled_retrievers is not None:

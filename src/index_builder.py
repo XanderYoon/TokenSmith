@@ -17,6 +17,7 @@ from typing import List, Dict
 import faiss
 from rank_bm25 import BM25Okapi
 from src.embedder import SentenceTransformer
+from src.graph import build_graph_artifact, save_graph_artifact
 
 from src.preprocessing.chunking import ChunkConfig, DocumentChunker
 from src.preprocessing.extraction import extract_sections_from_markdown
@@ -54,6 +55,7 @@ def build_index(
         - {prefix}_chunks.pkl
         - {prefix}_sources.pkl
         - {prefix}_meta.pkl
+        - {prefix}_graph.json
     """
     all_chunks: List[str] = []
     sources: List[str] = []
@@ -151,7 +153,17 @@ def build_index(
         json.dump(final_map, f, indent=2)
     print(f"Saved page to chunk ID map: {output_file}")
 
-    # Step 2: Create embeddings for FAISS index
+    # Step 2: Build and persist graph artifact from the same chunk text used for retrieval.
+    graph_artifact = build_graph_artifact(
+        all_chunks,
+        document_id=index_prefix,
+        metadata_by_chunk=metadata,
+    )
+    graph_path = artifacts_dir / f"{index_prefix}_graph.json"
+    save_graph_artifact(graph_path, graph_artifact)
+    print(f"Saved graph artifact: {graph_path}")
+
+    # Step 3: Create embeddings for FAISS index
     print(f"Embedding {len(all_chunks):,} chunks with {pathlib.Path(embedding_model_path).stem} ...")
     embedder = SentenceTransformer(embedding_model_path)
 
@@ -178,7 +190,7 @@ def build_index(
             convert_to_numpy=True 
         )
 
-    # Step 3: Build FAISS index
+    # Step 4: Build FAISS index
     print(f"Building FAISS index for {len(all_chunks):,} chunks...")
     dim = embeddings.shape[1]
     index = faiss.IndexFlatL2(dim)
@@ -186,7 +198,7 @@ def build_index(
     faiss.write_index(index, str(artifacts_dir / f"{index_prefix}.faiss"))
     print(f"FAISS Index built successfully: {index_prefix}.faiss")
 
-    # Step 4: Build BM25 index
+    # Step 5: Build BM25 index
     print(f"Building BM25 index for {len(all_chunks):,} chunks...")
     tokenized_chunks = [preprocess_for_bm25(chunk) for chunk in all_chunks]
     bm25_index = BM25Okapi(tokenized_chunks)
@@ -194,7 +206,7 @@ def build_index(
         pickle.dump(bm25_index, f)
     print(f"BM25 Index built successfully: {index_prefix}_bm25.pkl")
 
-    # Step 5: Dump index artifacts
+    # Step 6: Dump index artifacts
     with open(artifacts_dir / f"{index_prefix}_chunks.pkl", "wb") as f:
         pickle.dump(all_chunks, f)
     with open(artifacts_dir / f"{index_prefix}_sources.pkl", "wb") as f:

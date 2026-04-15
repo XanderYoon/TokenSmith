@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import numpy as np
 
+from src.graph import load_graph_artifact
 from src.index_builder import build_index
 from src.preprocessing.chunking import DocumentChunker, StructureAwareConfig, StructureAwareStrategy
 
@@ -65,10 +66,12 @@ Plain paragraph in next section.
     meta_path = artifacts_dir / "test_index_meta.pkl"
     chunks_path = artifacts_dir / "test_index_chunks.pkl"
     page_map_path = artifacts_dir / "test_index_page_to_chunk_map.json"
+    graph_path = artifacts_dir / "test_index_graph.json"
 
     metadata = pickle.loads(meta_path.read_bytes())
     chunks = pickle.loads(chunks_path.read_bytes())
     page_map = json.loads(page_map_path.read_text(encoding="utf-8"))
+    graph_artifact = load_graph_artifact(graph_path)
 
     assert len(chunks) == 4
     assert [item["chunk_id"] for item in metadata] == [0, 1, 2, 3]
@@ -82,6 +85,11 @@ Plain paragraph in next section.
     assert metadata[2]["page_numbers"] == [57]
     assert "--- Page 56 ---" not in chunks[1]
     assert page_map == {"1": [0, 1], "57": [2, 3]}
+    assert graph_artifact.document_id == "test_index"
+    assert len(graph_artifact.chunk_links) >= 1
+    assert any(link.chunk_id == 0 for link in graph_artifact.chunk_links)
+    assert any(node.node_id == "entity:lead-paragraph-for-the-section" for node in graph_artifact.nodes)
+    assert graph_artifact.chunk_links[0].metadata["section"] == "Section 1.3 View of Data"
 
 
 def test_build_index_records_fallback_split_metadata(tmp_path):
@@ -118,9 +126,11 @@ Sentence one is long enough to require a split. Sentence two is also long enough
 
     metadata = pickle.loads((artifacts_dir / "test_index_meta.pkl").read_bytes())
     chunks = pickle.loads((artifacts_dir / "test_index_chunks.pkl").read_bytes())
+    graph_artifact = load_graph_artifact(artifacts_dir / "test_index_graph.json")
 
     assert len(chunks) >= 2
     assert all(item["chunk_unit_type"] == "fallback_split" for item in metadata)
     assert all(item["unit_heading"] == "Section 1.3.1 Data Models" for item in metadata)
     assert all(item["chunk_id"] == idx for idx, item in enumerate(metadata))
     assert all(len(chunk) <= 60 for chunk in chunks)
+    assert graph_artifact.document_id == "test_index"

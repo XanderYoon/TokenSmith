@@ -276,12 +276,18 @@ def run_chat_session(args: argparse.Namespace, cfg: RAGConfig):
     print("Initializing TokenSmith Chat...")
     try:
         artifacts_dir = cfg.get_artifacts_directory()
-        faiss_idx, bm25_idx, chunks, sources, meta = load_artifacts(artifacts_dir, args.index_prefix)
+        faiss_idx, bm25_idx, chunks, sources, meta, graph_artifact = load_artifacts(
+            artifacts_dir,
+            args.index_prefix,
+            require_graph=cfg.enabled_retrievers.get("graph", False),
+            graph_artifact_path=cfg.graph_artifact_path,
+        )
         print(f"Loaded {len(chunks)} chunks and {len(sources)} sources from artifacts.")
         retrievers = build_retrievers(
             cfg,
             faiss_index=faiss_idx,
             bm25_index=bm25_idx,
+            graph_artifact=graph_artifact,
         )
         
         ranker = EnsembleRanker(
@@ -292,7 +298,14 @@ def run_chat_session(args: argparse.Namespace, cfg: RAGConfig):
             normalization=cfg.score_normalization,
         )
         print("Loaded retrievers and initialized ranker.")
-        artifacts = {"chunks": chunks, "sources": sources, "retrievers": retrievers, "ranker": ranker, "meta": meta}
+        artifacts = {
+            "chunks": chunks,
+            "sources": sources,
+            "retrievers": retrievers,
+            "ranker": ranker,
+            "meta": meta,
+            "graph": graph_artifact,
+        }
     except Exception as e:
         print(f"ERROR: {e}. Run 'index' mode first.")
         sys.exit(1)
