@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from src.graph.extraction import build_graph_artifact
 from src.graph.store import (
     GRAPH_ARTIFACT_VERSION,
     GraphArtifact,
@@ -107,3 +108,15 @@ def test_graph_artifact_rejects_duplicate_chunk_links():
                 GraphChunkLink(chunk_id=1, node_ids=["entity:a"]),
             ],
         )
+
+
+def test_build_graph_artifact_merges_labels_with_same_slugified_node_id():
+    artifact = build_graph_artifact(
+        ["B+-tree", "B tree"],
+        document_id="textbook_index",
+    )
+
+    assert len(artifact.nodes) == 1
+    assert artifact.nodes[0].node_id == "entity:b-tree"
+    assert artifact.nodes[0].aliases == ["b tree", "b+-tree"]
+    assert artifact.nodes[0].chunk_ids == [0, 1]

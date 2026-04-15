@@ -155,8 +155,7 @@ def build_graph_artifact(
     if len(metadata_list) != len(chunk_list):
         raise ValueError("metadata_by_chunk must align 1:1 with chunks")
 
-    node_chunks: Dict[str, set[int]] = defaultdict(set)
-    node_aliases: Dict[str, set[str]] = defaultdict(set)
+    node_records: Dict[str, Dict[str, Any]] = {}
     edge_chunks: Dict[str, set[int]] = defaultdict(set)
     edge_metadata: Dict[str, Dict[str, Any]] = {}
     chunk_links: List[GraphChunkLink] = []
@@ -167,8 +166,21 @@ def build_graph_artifact(
             continue
 
         for label in extracted["node_labels"]:
-            node_chunks[label].add(chunk_id)
-            node_aliases[label].add(label)
+            node_id = _entity_id(label)
+            record = node_records.setdefault(
+                node_id,
+                {
+                    "label": label,
+                    "aliases": set(),
+                    "chunk_ids": set(),
+                },
+            )
+            # Prefer the shortest readable label as the canonical label when
+            # multiple normalized phrases collapse to the same slugified node id.
+            if len(label) < len(record["label"]):
+                record["label"] = label
+            record["aliases"].add(label)
+            record["chunk_ids"].add(chunk_id)
 
         for edge in extracted["edges"]:
             edge_id = _edge_id(edge["source_label"], edge["relation"], edge["target_label"])
@@ -206,13 +218,13 @@ def build_graph_artifact(
 
     nodes = [
         GraphNode(
-            node_id=_entity_id(label),
-            label=label,
-            aliases=sorted(node_aliases[label]),
-            chunk_ids=sorted(node_chunks[label]),
+            node_id=node_id,
+            label=node_records[node_id]["label"],
+            aliases=sorted(node_records[node_id]["aliases"]),
+            chunk_ids=sorted(node_records[node_id]["chunk_ids"]),
             metadata={"extractor": "heuristic_v1"},
         )
-        for label in sorted(node_chunks)
+        for node_id in sorted(node_records)
     ]
 
     edges = [
