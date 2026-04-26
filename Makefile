@@ -1,4 +1,4 @@
-.PHONY: help env build-llama clean test run-index run-chat install update-env
+.PHONY: help env build-llama clean test run-index run-chat install update-env install-models
 
 help:
 	@echo "TokenSmith - RAG Application (Conda Dependencies)"
@@ -6,6 +6,7 @@ help:
 	@echo "  env         - Create conda environment with all dependencies"
 	@echo "  update-env  - Update environment from environment.yml"
 	@echo "  build-llama - Build llama.cpp (if not found)"  
+	@echo "  install-models - Download recommended baseline/GPU GGUF models"
 	@echo "  install     - Install package in development mode"
 	@echo "  test        - Run tests"
 	@echo "  clean       - Clean build artifacts"
@@ -28,6 +29,10 @@ update-env:
 build-llama:
 	@echo "Checking for existing llama.cpp installation..."
 	conda run -n tokensmith python scripts/detect_llama.py || conda run -n tokensmith bash scripts/build_llama.sh
+
+install-models:
+	@echo "Downloading recommended TokenSmith GGUF models..."
+	conda run --no-capture-output -n tokensmith bash scripts/install_recommended_models.sh $(PROFILE)
 
 # Install package in development mode (no dependencies, they're from conda)
 install:

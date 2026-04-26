@@ -34,7 +34,8 @@ def test_end_to_end_pipeline_stubbed():
         top_k=2,
         num_candidates=5,
         ensemble_method="linear",
-        ranker_weights={"faiss": 0.5, "bm25": 0.5},
+        ranker_weights={"faiss": 0.4, "bm25": 0.4, "graph": 0.2},
+        enabled_retrievers=["faiss", "bm25", "graph"],
         chunk_mode="recursive_sections",
         use_hyde=False,
         disable_chunks=False,
@@ -59,16 +60,18 @@ def test_end_to_end_pipeline_stubbed():
     # Setup Mock Retrievers
     faiss_scores = {0: 0.9, 2: 0.8, 1: 0.1, 3: 0.05, 4: 0.05}
     bm25_scores = {0: 0.8, 2: 0.9, 3: 0.2, 1: 0.05, 4: 0.05}
+    graph_scores = {0: 1.0, 2: 0.7}
     
     retrievers = [
         MockRetriever("faiss", faiss_scores),
-        MockRetriever("bm25", bm25_scores)
+        MockRetriever("bm25", bm25_scores),
+        MockRetriever("graph", graph_scores),
     ]
     
     # Setup Ranker (using real EnsembleRanker)
     ranker = EnsembleRanker(
         ensemble_method="linear",
-        weights={"faiss": 0.5, "bm25": 0.5}
+        weights={"faiss": 0.4, "bm25": 0.4, "graph": 0.2}
     )
     
     artifacts = {
@@ -156,4 +159,3 @@ def test_end_to_end_pipeline_stubbed():
         # Note: chunks might be passed exactly as they are in the 'chunks' list
         assert any("Python is a programming language." in c for c in passed_chunks)
         assert any("Machine learning uses statistics." in c for c in passed_chunks)
-

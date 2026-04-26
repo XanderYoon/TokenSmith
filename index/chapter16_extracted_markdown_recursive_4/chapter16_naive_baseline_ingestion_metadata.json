@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "ingestion_started_at_utc": "2026-04-25T20:19:45.022163+00:00",
+  "ingestion_completed_at_utc": "2026-04-25T20:47:31.113388+00:00",
+  "ingestion_duration_seconds": 1666.09,
+  "source": {
+    "source_file": "data/chapter16--extracted_markdown.md",
+    "source_file_exists": true,
+    "source_file_size_bytes": 122722,
+    "source_document_char_count": 122337
+  },
+  "chunks": {
+    "chunk_count": 62,
+    "artifact_file": "chapter16_naive_baseline_chunks.pkl",
+    "artifact_size_bytes": 117153
+  },
+  "chunking": {
+    "method_label": "naive_recursive",
+    "method_config": "chunk_mode=naive+recursive, chunk_size=2000, overlap=200"
+  },
+  "estimated_token_cost": {
+    "estimation_method": "characters_divided_by_4",
+    "estimated_total_tokens": 29096,
+    "average_tokens_per_chunk": 469.2903225806452
+  },
+  "artifacts": {
+    "artifact_files": {
+      "chapter16_naive_baseline.faiss": 634925,
+      "chapter16_naive_baseline_bm25.pkl": 119935,
+      "chapter16_naive_baseline_chunks.pkl": 117153,
+      "chapter16_naive_baseline_graph.json": 4056605,
+      "chapter16_naive_baseline_meta.pkl": 12977,
+      "chapter16_naive_baseline_page_to_chunk_map.json": 2130,
+      "chapter16_naive_baseline_sources.pkl": 178
+    },
+    "artifact_directory_total_size_bytes": 4943903
+  }
+}

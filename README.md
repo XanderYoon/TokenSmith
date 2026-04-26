@@ -40,15 +40,48 @@ mkdir models
 cd models
 ```
 
-Now, let's say config.yaml has following configs:
+TokenSmith now supports two local model profiles:
+
+- Baseline CPU-safe profile:
+  - `models/Qwen3-Embedding-4B-Q5_K_M.gguf`
+  - `models/qwen2.5-3b-instruct-q8_0.gguf`
+- Stronger GPU profile:
+  - `models/Qwen3-Embedding-4B-Q8_0.gguf`
+  - `models/Qwen2.5-7B-Instruct-Q4_K_M.gguf`
+
+For your class of machine, the intended upgrade path is the stronger GPU profile when llama.cpp can use the GPU, with the baseline profile kept as the automatic fallback.
+
+You can download the recommended files with:
+
+```shell
+make install-models PROFILE=all
+```
+
+Or only one profile:
+
+```shell
+make install-models PROFILE=baseline
+make install-models PROFILE=gpu
+```
+
+If you prefer manual downloads, use the model repos below and keep the expected local filenames.
+
+Now, let's say `config.yaml` has following configs:
 ```yaml
 embed_model: "models/Qwen3-Embedding-4B-Q5_K_M.gguf"
-model_path: "models/qwen2.5-1.5b-instruct-q5_k_m.gguf"
+gpu_embed_model: "models/Qwen3-Embedding-4B-Q8_0.gguf"
+gen_model: "models/qwen2.5-3b-instruct-q8_0.gguf"
+gpu_gen_model: "models/Qwen2.5-7B-Instruct-Q4_K_M.gguf"
+runtime_model_profile: "auto"
 ```
-For above config file, download appropriate files from the below link 
-and put them in the `models/` folder with the expected file name.
+For the embedding models, download from:
 - https://huggingface.co/Qwen/Qwen3-Embedding-4B-GGUF/tree/main
-- https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/tree/main
+
+For the baseline generator, download from:
+- https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/tree/main
+
+For the stronger 7B generator used by the GPU profile, the helper script downloads:
+- https://huggingface.co/lmstudio-community/Qwen2.5-7B-Instruct-GGUF
 
 ### 2) Build (creates env, builds llama.cpp, installs deps)
 
@@ -73,6 +106,12 @@ We can not use later version of faiss from pip (which is compatible with newer n
 because of multiple instantiations of OpenMP on Apple Silicon.
 
 Creates a Conda env `tokensmith`, installs Python deps, and builds/detects `llama.cpp`.
+
+On Linux, the setup now selects:
+
+- `CUDA` for NVIDIA GPUs
+- `Vulkan` for AMD GPUs such as the Radeon RX 7600 XT
+- `OpenBLAS` for CPU-only hosts
 
 ### 3) Activate the environment
 
@@ -112,7 +151,22 @@ make run-index ARGS="--pdf_range 1-10 --chunk_mode chars --visualize"
 python -m src.main chat
 ```
 
-> If you see a missing-model error, download `qwen2.5-0.5b-instruct-q5_k_m.gguf` into `llama.cpp/models`.
+At startup, TokenSmith now checks for a usable GPU backend and:
+
+- uses the stronger GPU profile by default when available
+- falls back to the baseline profile when no valid GPU is detected or the GPU GGUF files are missing
+
+To force one side explicitly:
+
+```yaml
+runtime_model_profile: "baseline"
+```
+
+or
+
+```yaml
+runtime_model_profile: "gpu"
+```
 
 ### 8) Deactivate
 

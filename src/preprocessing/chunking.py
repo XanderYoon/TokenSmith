@@ -29,6 +29,20 @@ class SectionRecursiveConfig(ChunkConfig):
         assert self.recursive_chunk_size > 0, "recursive_chunk_size must be > 0"
         assert self.recursive_overlap >= 0, "recursive_overlap must be >= 0"
 
+
+@dataclass
+class NaiveRecursiveConfig(ChunkConfig):
+    """Configuration for document-wide recursive splitting without section boundaries."""
+    recursive_chunk_size: int
+    recursive_overlap: int
+
+    def to_string(self) -> str:
+        return f"chunk_mode=naive+recursive, chunk_size={self.recursive_chunk_size}, overlap={self.recursive_overlap}"
+
+    def validate(self):
+        assert self.recursive_chunk_size > 0, "recursive_chunk_size must be > 0"
+        assert self.recursive_overlap >= 0, "recursive_overlap must be >= 0"
+
 # -------------------------- Chunking Strategies --------------------------
 
 class ChunkStrategy(ABC):
@@ -71,6 +85,32 @@ class SectionRecursiveStrategy(ChunkStrategy):
             chunk_size=self.recursive_chunk_size,
             chunk_overlap=self.recursive_overlap,
             separators=[". "]
+        )
+        return splitter.split_text(text)
+
+
+class NaiveRecursiveStrategy(ChunkStrategy):
+    """
+    Applies recursive character-based splitting across the full document body.
+    This ignores section boundaries during chunk formation.
+    """
+
+    def __init__(self, config: NaiveRecursiveConfig):
+        self.config = config
+        self.recursive_chunk_size = config.recursive_chunk_size
+        self.recursive_overlap = config.recursive_overlap
+
+    def name(self) -> str:
+        return f"naive+recursive({self.recursive_chunk_size},{self.recursive_overlap})"
+
+    def artifact_folder_name(self) -> str:
+        return "naive"
+
+    def chunk(self, text: str) -> List[str]:
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=self.recursive_chunk_size,
+            chunk_overlap=self.recursive_overlap,
+            separators=[". "],
         )
         return splitter.split_text(text)
 

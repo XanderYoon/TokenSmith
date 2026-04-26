@@ -1,0 +1,36 @@
+{
+  "label": "2B_SOURCE_B",
+  "index_prefix": "chapter18_structure_baseline",
+  "artifacts_dir": "index/chapter18_extracted_markdown_structure_2",
+  "benchmark_path": "index/chapter18_extracted_markdown_structure_2/chapter18_structure_baseline_tuning/benchmarks/20260426T052153Z_experiment_2b_source_b_shared_automated_ragas_20_nonllm.json",
+  "prompt_count": 20,
+  "ragas": {
+    "nonllm_context_recall": 0.875,
+    "nonllm_context_precision": 0.7017261904129344
+  },
+  "ragas_status": "completed",
+  "ragas_error": null,
+  "latency": {
+    "average_latency_seconds": 0.11417656350531616
+  },
+  "estimated_tokens": {
+    "average_estimated_total_tokens": 4746.05
+  },
+  "retrieval_overlap": {
+    "average_selected_recall_at_k": 0.3
+  },
+  "weights": {
+    "faiss": 0.55,
+    "bm25": 0.2,
+    "index_keywords": 0.1,
+    "graph": 0.15
+  },
+  "benchmark_settings": {
+    "answer_mode": "extractive_top2_context_preview",
+    "top_k": 10,
+    "ragas_metric_names": [
+      "nonllm_context_recall",
+      "nonllm_context_precision"
+    ]
+  }
+}

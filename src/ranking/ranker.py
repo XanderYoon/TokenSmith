@@ -25,7 +25,7 @@ class EnsembleRanker:
 
         # Validate that weights for the provided retrievers sum to 1.0
         active_weights = sum(self.weights.values())
-        if active_weights != 1.0:
+        if abs(active_weights - 1.0) > 1e-6:
             raise ValueError(f"Weights for active retrivers must sum to 1.0. Current sum: {active_weights}")
 
     def rank(self, raw_scores: Dict[str, Dict[Candidate, float]]) -> Tuple[List[int], List[float]]:

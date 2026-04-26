@@ -1,0 +1,31 @@
+{
+  "label": "1A",
+  "index_prefix": "chapter16_naive_baseline",
+  "artifacts_dir": "index/chapter16_extracted_markdown_recursive_4",
+  "chunking_method": "naive",
+  "benchmark_path": "index/chapter16_extracted_markdown_recursive_4/chapter16_naive_baseline_tuning/benchmarks/20260426T051757Z_experiment_1a_shared_automated_ragas_20_nonllm.json",
+  "prompt_count": 20,
+  "ragas": {
+    "nonllm_context_recall": 0.0,
+    "nonllm_context_precision": 0.0
+  },
+  "ragas_status": "completed",
+  "ragas_error": null,
+  "latency": {
+    "average_latency_seconds": 0.001408662753237877
+  },
+  "estimated_tokens": {
+    "average_estimated_total_tokens": 4982.35
+  },
+  "retrieval_overlap": {
+    "average_selected_recall_at_k": 0.1
+  },
+  "benchmark_settings": {
+    "answer_mode": "extractive_top2_context_preview",
+    "top_k": 10,
+    "ragas_metric_names": [
+      "nonllm_context_recall",
+      "nonllm_context_precision"
+    ]
+  }
+}

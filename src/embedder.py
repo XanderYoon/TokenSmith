@@ -8,6 +8,8 @@ from typing import List, Union, Optional
 from llama_cpp import Llama
 from tqdm import tqdm
 
+from src.runtime_models import detect_hardware_profile
+
 # Global variables for worker processes
 _worker_model: Optional[Llama] = None
 _worker_embedding_dim: int = 0
@@ -18,14 +20,22 @@ def _init_worker(model_path: str, n_ctx: int, n_threads: int):
     """
     global _worker_model, _worker_embedding_dim
 
-    _worker_model = Llama(
+    hardware = detect_hardware_profile()
+    llama_kwargs = dict(
         model_path=model_path,
         n_ctx=n_ctx,
         n_threads=n_threads,
         embedding=True,
         verbose=False,
-        use_mmap=True # Allows OS to share model weights across processes
+        use_mmap=True,
     )
+    try:
+        if hardware.gpu_available:
+            llama_kwargs["n_gpu_layers"] = -1
+        _worker_model = Llama(**llama_kwargs)
+    except Exception:
+        llama_kwargs.pop("n_gpu_layers", None)
+        _worker_model = Llama(**llama_kwargs)
     
     # Cache dimension
     test_emb = _worker_model.create_embedding("test")['data'][0]['embedding']
@@ -63,16 +73,28 @@ class SentenceTransformer:
         """
         self.model_path = model_path
         self.n_ctx = n_ctx
-        
-        self.model = Llama(
+
+        hardware = detect_hardware_profile()
+        llama_kwargs = dict(
             model_path=model_path,
             n_ctx=n_ctx,
             n_threads=n_threads,
             embedding=True,
             verbose=True,
             use_mmap=True,
-            n_gpu_layers=-1 # use GPU if available
         )
+        try:
+            if hardware.gpu_available:
+                llama_kwargs["n_gpu_layers"] = -1
+            self.model = Llama(**llama_kwargs)
+        except Exception as exc:
+            if hardware.gpu_available:
+                print(
+                    f"Error loading embedding model {model_path} with GPU backend "
+                    f"{hardware.backend}: {exc}. Falling back to CPU."
+                )
+            llama_kwargs.pop("n_gpu_layers", None)
+            self.model = Llama(**llama_kwargs)
         self._embedding_dimension = None
         
         _ = self.embedding_dimension
@@ -84,6 +106,31 @@ class SentenceTransformer:
             test_embedding = self.model.create_embedding("test")['data'][0]['embedding']
             self._embedding_dimension = len(test_embedding)
         return self._embedding_dimension
+
+    def encode_batch(self, texts: Union[str, List[str]]) -> np.ndarray:
+        """
+        Encode a single caller-defined batch without internal progress bars.
+        """
+        if isinstance(texts, str):
+            texts = [texts]
+        if not texts:
+            return np.zeros((0, self.embedding_dimension), dtype=np.float32)
+
+        try:
+            response = self.model.create_embedding(texts)
+            batch_embeddings = [item['embedding'] for item in response['data']]
+        except Exception as e:
+            print(f"Error encoding batch: {e}")
+            batch_embeddings = []
+            for text in texts:
+                try:
+                    single_response = self.model.create_embedding(text)
+                    batch_embeddings.append(single_response['data'][0]['embedding'])
+                except Exception as single_exc:
+                    print(f"Error encoding text fallback: {single_exc}")
+                    batch_embeddings.append([0.0] * self.embedding_dimension)
+
+        return np.array(batch_embeddings, dtype=np.float32)
 
     def encode(self, 
            texts: Union[str, List[str]], 
@@ -118,20 +165,8 @@ class SentenceTransformer:
             end_idx = min((i + 1) * batch_size, len(texts))
             batch_texts = texts[start_idx:end_idx]
             
-            try:
-                # IMPORTANT CHANGE: Pass the entire LIST to the model at once.
-                # This triggers the native C++/Metal batch processing logic.
-                response = self.model.create_embedding(batch_texts)
-                
-                # Extract the list of embedding vectors from the response
-                batch_embeddings = [item['embedding'] for item in response['data']]
-                embeddings.extend(batch_embeddings)
-                
-            except Exception as e:
-                print(f"Error encoding batch: {e}")
-                # Fallback: encode one by one if batch fails, or append zeros
-                for _ in batch_texts:
-                    embeddings.append([0.0] * self.embedding_dimension)
+            batch_embeddings = self.encode_batch(batch_texts)
+            embeddings.extend(batch_embeddings.tolist())
                 
         vecs = np.array(embeddings, dtype=np.float32)
         
@@ -145,10 +180,11 @@ class SentenceTransformer:
         """Get the dimension of embeddings (compatibility method)."""
         return self.embedding_dimension
 
-    def start_multi_process_pool(self, num_workers: int = None) -> multiprocessing.pool.Pool:
+    def start_multi_process_pool(self, num_workers: int = None, workers: int = None) -> multiprocessing.pool.Pool:
         """
         Starts a pool of worker processes.
         """
+        num_workers = workers if workers is not None else num_workers
         if num_workers:
             workers = num_workers
         else:
@@ -196,6 +232,23 @@ class SentenceTransformer:
         ordered_embeddings = [flat_embeddings[i] for i in inverse_indices]
         
         return np.array(ordered_embeddings, dtype=np.float32)
+
+    def encode_batch_multi_process(
+        self,
+        texts: List[str],
+        pool: multiprocessing.pool.Pool,
+    ) -> np.ndarray:
+        """
+        Encode a single caller-defined batch using the worker pool.
+        """
+        if not texts:
+            return np.zeros((0, self.embedding_dimension), dtype=np.float32)
+        worker_count = max(1, int(getattr(pool, "_processes", 1) or 1))
+        chunk_size = max(1, (len(texts) + worker_count - 1) // worker_count)
+        text_chunks = [texts[idx:idx + chunk_size] for idx in range(0, len(texts), chunk_size)]
+        results = pool.map(_encode_batch_worker, text_chunks)
+        batch_embeddings = [embedding for chunk in results for embedding in chunk]
+        return np.array(batch_embeddings, dtype=np.float32)
 
     @staticmethod
     def stop_multi_process_pool(pool: multiprocessing.pool.Pool):

@@ -95,6 +95,9 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
+*.tex
+*.md
+ProjectReport.tex
 
 # Translations
 *.mo

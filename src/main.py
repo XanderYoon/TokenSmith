@@ -20,9 +20,7 @@ from src.preprocessing.chunking import DocumentChunker
 from src.query_enhancement import generate_hypothetical_document, contextualize_query
 from src.retriever import (
     filter_retrieved_chunks, 
-    BM25Retriever, 
-    FAISSRetriever, 
-    IndexKeywordRetriever, 
+    build_retrievers,
     get_page_numbers, 
     load_artifacts
 )
@@ -35,6 +33,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("mode", choices=["index", "chat"], help="operation mode")
     parser.add_argument("--pdf_dir", default="data/chapters/", help="directory containing PDF files")
     parser.add_argument("--index_prefix", default="textbook_index", help="prefix for generated index files")
+    parser.add_argument(
+        "--markdown_file",
+        help="specific markdown file to index; defaults to the first markdown file found under data/",
+    )
     parser.add_argument("--model_path", help="path to generation model")
     parser.add_argument("--system_prompt_mode", choices=["baseline", "tutor", "concise", "detailed"], default="baseline")
     
@@ -42,6 +44,21 @@ def parse_args() -> argparse.Namespace:
     indexing_group.add_argument("--keep_tables", action="store_true")
     indexing_group.add_argument("--multiproc_indexing", action="store_true")
     indexing_group.add_argument("--embed_with_headings", action="store_true")
+    indexing_group.add_argument(
+        "--chunking_method",
+        choices=["structure_aware", "naive"],
+        help="override the chunking method for this indexing run",
+    )
+    indexing_group.add_argument(
+        "--chunk_size",
+        type=int,
+        help="override the chunk size for this indexing run",
+    )
+    indexing_group.add_argument(
+        "--chunk_overlap",
+        type=int,
+        help="override the chunk overlap for this indexing run",
+    )
     parser.add_argument(
         "--double_prompt",
         action="store_true",
@@ -50,36 +67,99 @@ def parse_args() -> argparse.Namespace:
 
     return parser.parse_args()
 
+
+def _resolve_indexing_config(args: argparse.Namespace, cfg: RAGConfig) -> RAGConfig:
+    if (
+        args.chunking_method is None
+        and args.chunk_size is None
+        and args.chunk_overlap is None
+    ):
+        return cfg
+
+    config_state = cfg.get_config_state()
+    if args.chunking_method == "structure_aware":
+        config_state["chunk_mode"] = "recursive_sections"
+    elif args.chunking_method == "naive":
+        config_state["chunk_mode"] = "recursive_naive"
+
+    if args.chunk_size is not None:
+        config_state["chunk_size"] = int(args.chunk_size)
+    if args.chunk_overlap is not None:
+        config_state["chunk_overlap"] = int(args.chunk_overlap)
+
+    return RAGConfig(**config_state)
+
+
+def _resolve_runtime_config(args: argparse.Namespace, cfg: RAGConfig) -> tuple[RAGConfig, Dict[str, object]]:
+    runtime_selection = cfg.resolve_runtime_models(gen_model_override=args.model_path)
+    config_state = cfg.get_config_state()
+    config_state["embed_model"] = runtime_selection["embed_model"]
+    config_state["gen_model"] = runtime_selection["gen_model"]
+    return RAGConfig(**config_state), runtime_selection
+
+
+def _print_runtime_model_selection(selection: Dict[str, object]):
+    print(
+        "Runtime model selection: "
+        f"profile={selection['selected_profile']} "
+        f"backend={selection['hardware_backend']} "
+        f"embed={selection['embed_model']} "
+        f"gen={selection['gen_model']}"
+    )
+    print(f"Hardware detection: {selection['hardware_reason']}")
+    if selection.get("gpu_model_missing"):
+        print("GPU profile requested but one or more GPU GGUF files were missing. Falling back to baseline models.")
+
 def run_index_mode(args: argparse.Namespace, cfg: RAGConfig):
-    strategy = cfg.get_chunk_strategy()
+    effective_cfg = _resolve_indexing_config(args, cfg)
+    strategy = effective_cfg.get_chunk_strategy()
     chunker = DocumentChunker(strategy=strategy, keep_tables=args.keep_tables)
-    artifacts_dir = cfg.get_artifacts_directory()
+    print(
+        f"Indexing with chunk mode '{effective_cfg.chunk_mode}' "
+        f"(size={effective_cfg.chunk_size}, overlap={effective_cfg.chunk_overlap})"
+    )
 
-    data_dir = pathlib.Path("data")
-    print(f"Looking for markdown files in {data_dir.resolve()}...")
-    md_files = sorted(data_dir.glob("*.md"))
-    print(f"Found {len(md_files)} markdown files.")
-    print(f"First 5 markdown files: {[str(f) for f in md_files[:5]]}")
+    markdown_file: pathlib.Path
+    if args.markdown_file:
+        markdown_file = pathlib.Path(args.markdown_file)
+        print(f"Using explicitly selected markdown file: {markdown_file}")
+        if not markdown_file.exists():
+            print(f"ERROR: Markdown file not found: {markdown_file}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        data_dir = pathlib.Path("data")
+        print(f"Looking for markdown files in {data_dir.resolve()}...")
+        md_files = sorted(data_dir.glob("*.md"))
+        print(f"Found {len(md_files)} markdown files.")
+        print(f"First 5 markdown files: {[str(f) for f in md_files[:5]]}")
 
-    if not md_files:
-        print("ERROR: No markdown files found in data/.", file=sys.stderr)
-        sys.exit(1)
+        if not md_files:
+            print("ERROR: No markdown files found in data/.", file=sys.stderr)
+            sys.exit(1)
+
+        markdown_file = md_files[0]
+        print(f"Selected markdown file: {markdown_file}")
+
+    artifacts_dir = effective_cfg.build_versioned_artifacts_directory(markdown_file)
+    print(f"Saving index artifacts to {artifacts_dir}")
 
     build_index(
-        markdown_file=str(md_files[0]),
+        markdown_file=str(markdown_file),
         chunker=chunker,
-        chunk_config=cfg.chunk_config,
-        embedding_model_path=cfg.embed_model,
+        chunk_config=effective_cfg.chunk_config,
+        graph_max_entities_per_chunk=effective_cfg.graph_max_entities_per_chunk,
+        embedding_model_path=effective_cfg.embed_model,
         artifacts_dir=artifacts_dir,
         index_prefix=args.index_prefix,
         use_multiprocessing=args.multiproc_indexing,
         use_headings=args.embed_with_headings,
     )
 
-def use_indexed_chunks(question: str, chunks: list) -> list:
+def use_indexed_chunks(question: str, chunks: list, cfg: RAGConfig, index_prefix: str) -> list:
     # Logic for keyword matching from textbook index
     try:
-        with open('index/sections/textbook_index_page_to_chunk_map.json', 'r') as f:
+        artifacts_dir = cfg.resolve_artifacts_directory(index_prefix)
+        with open(cfg.get_page_to_chunk_map_artifact_path(index_prefix, artifacts_dir=artifacts_dir), 'r') as f:
             page_to_chunk_map = json.load(f)
         with open('data/extracted_index.json', 'r') as f:
             extracted_index = json.load(f)
@@ -129,7 +209,7 @@ def get_answer(
         # No chunks - baseline mode
         ranked_chunks = []
     elif cfg.use_indexed_chunks:
-        ranked_chunks, topk_idxs = use_indexed_chunks(question, chunks)
+        ranked_chunks, topk_idxs = use_indexed_chunks(question, chunks, cfg, args.index_prefix)
     else:
         retrieval_query = question
         # print(f"Retrieval query: {retrieval_query}")
@@ -163,6 +243,7 @@ def get_answer(
             faiss_scores = raw_scores.get("faiss", {})
             bm25_scores = raw_scores.get("bm25", {})
             index_scores = raw_scores.get("index_keywords", {})
+            graph_scores = raw_scores.get("graph", {})
             
             faiss_ranked = sorted(faiss_scores.keys(), key=lambda i: faiss_scores[i], reverse=True)
             bm25_ranked = sorted(bm25_scores.keys(), key=lambda i: bm25_scores[i], reverse=True)
@@ -171,6 +252,8 @@ def get_answer(
             faiss_ranks = {idx: rank + 1 for rank, idx in enumerate(faiss_ranked)}
             bm25_ranks = {idx: rank + 1 for rank, idx in enumerate(bm25_ranked)}
             index_ranks = {idx: rank + 1 for rank, idx in enumerate(index_ranked)}
+            graph_ranked = sorted(graph_scores.keys(), key=lambda i: graph_scores[i], reverse=True)
+            graph_ranks = {idx: rank + 1 for rank, idx in enumerate(graph_ranked)}
             
             chunks_info = []
             for rank, idx in enumerate(topk_idxs, 1):
@@ -184,6 +267,8 @@ def get_answer(
                     "bm25_rank": bm25_ranks.get(idx, 0),
                     "index_score": index_scores.get(idx, 0),
                     "index_rank": index_ranks.get(idx, 0),
+                    "graph_score": graph_scores.get(idx, 0),
+                    "graph_rank": graph_ranks.get(idx, 0),
                 })
 
         # Step 3: Final re-ranking
@@ -284,14 +369,27 @@ def run_chat_session(args: argparse.Namespace, cfg: RAGConfig):
 
     print("Initializing TokenSmith Chat...")
     try:
-        artifacts_dir = cfg.get_artifacts_directory()
-        faiss_idx, bm25_idx, chunks, sources, meta = load_artifacts(artifacts_dir, args.index_prefix)
+        artifacts_dir = cfg.resolve_artifacts_directory(args.index_prefix)
+        faiss_idx, bm25_idx, chunks, sources, meta, graph_store = load_artifacts(
+            artifacts_dir,
+            args.index_prefix,
+            cfg=cfg,
+        )
         print(f"Loaded {len(chunks)} chunks and {len(sources)} sources from artifacts.")
-        retrievers = [FAISSRetriever(faiss_idx, cfg.embed_model), BM25Retriever(bm25_idx)]
-        if cfg.ranker_weights.get("index_keywords", 0) > 0:
-            retrievers.append(IndexKeywordRetriever(cfg.extracted_index_path, cfg.page_to_chunk_map_path))
+        retrievers = build_retrievers(
+            cfg,
+            faiss_index=faiss_idx,
+            bm25_index=bm25_idx,
+            artifacts_dir=artifacts_dir,
+            index_prefix=args.index_prefix,
+            graph_store=graph_store,
+        )
         
-        ranker = EnsembleRanker(ensemble_method=cfg.ensemble_method, weights=cfg.ranker_weights, rrf_k=int(cfg.rrf_k))
+        ranker = EnsembleRanker(
+            ensemble_method=cfg.ensemble_method,
+            weights=cfg.get_active_ranker_weights(),
+            rrf_k=int(cfg.rrf_k),
+        )
         print("Loaded retrievers and initialized ranker.")
         artifacts = {"chunks": chunks, "sources": sources, "retrievers": retrievers, "ranker": ranker, "meta": meta}
     except Exception as e:
@@ -357,7 +455,9 @@ def main():
     config_path = pathlib.Path("config/config.yaml")
     if not config_path.exists(): raise FileNotFoundError("config/config.yaml not found.")
     cfg = RAGConfig.from_yaml(config_path)
+    cfg, runtime_selection = _resolve_runtime_config(args, cfg)
     print(f"Loaded configuration from {config_path.resolve()}.")
+    _print_runtime_model_selection(runtime_selection)
     if args.mode == "index":
         run_index_mode(args, cfg)
     elif args.mode == "chat":

@@ -20,6 +20,8 @@ import numpy as np
 from src.embedder import CachedEmbedder
 
 from src.config import RAGConfig
+from src.graph.retrieval import GraphRetriever
+from src.graph.store import GraphStore, load_graph_store
 from src.index_builder import preprocess_for_bm25
 
 
@@ -36,7 +38,11 @@ def _get_embedder(model_name: str) -> CachedEmbedder:
 
 # -------------------------- Read artifacts -------------------------------
 
-def load_artifacts(artifacts_dir: os.PathLike, index_prefix: str) -> Tuple[faiss.Index, List[str], List[str], Any]:
+def load_artifacts(
+    artifacts_dir: os.PathLike,
+    index_prefix: str,
+    cfg: Optional[RAGConfig] = None,
+) -> Tuple[faiss.Index, Any, List[str], List[str], Any, Optional[GraphStore]]:
     """
     Loads:
       - FAISS index: {index_prefix}.faiss
@@ -49,8 +55,24 @@ def load_artifacts(artifacts_dir: os.PathLike, index_prefix: str) -> Tuple[faiss
     chunks      = pickle.load(open(artifacts_dir / f"{index_prefix}_chunks.pkl", "rb"))
     sources     = pickle.load(open(artifacts_dir / f"{index_prefix}_sources.pkl", "rb"))
     metadata = pickle.load(open(artifacts_dir / f"{index_prefix}_meta.pkl", "rb"))
+    graph_store = None
 
-    return faiss_index, bm25_index, chunks, sources, metadata
+    graph_path = None
+    require_graph = False
+    if cfg is not None:
+        require_graph = "graph" in cfg.get_active_ranker_weights()
+        graph_path = cfg.get_graph_artifact_path(index_prefix, artifacts_dir=artifacts_dir)
+    else:
+        candidate_path = artifacts_dir / f"{index_prefix}_graph.json"
+        if candidate_path.exists():
+            graph_path = candidate_path
+
+    if graph_path is not None and pathlib.Path(graph_path).exists():
+        graph_store = load_graph_store(pathlib.Path(graph_path))
+    elif require_graph:
+        raise FileNotFoundError(f"Graph artifacts required but missing: {graph_path}")
+
+    return faiss_index, bm25_index, chunks, sources, metadata, graph_store
 
 
 # -------------------------- Helper to get page nums for chunks -------------------------------
@@ -84,6 +106,48 @@ class Retriever(ABC):
     def get_scores(self, query: str, pool_size: int, chunks: List[str]):
         """Retrieves the top 'pool_size' chunks cores for a given query."""
         pass
+
+
+def _resolve_page_to_chunk_map_path(
+    cfg: RAGConfig,
+    artifacts_dir: os.PathLike,
+    index_prefix: str,
+) -> pathlib.Path:
+    configured_path = pathlib.Path(cfg.page_to_chunk_map_path)
+    if configured_path.exists():
+        return configured_path
+    return pathlib.Path(artifacts_dir) / f"{index_prefix}_page_to_chunk_map.json"
+
+
+def build_retrievers(
+    cfg: RAGConfig,
+    *,
+    faiss_index: Any,
+    bm25_index: Any,
+    artifacts_dir: os.PathLike,
+    index_prefix: str,
+    graph_store: Optional[GraphStore] = None,
+) -> List["Retriever"]:
+    retrievers: List[Retriever] = []
+    enabled = cfg.get_active_ranker_weights()
+
+    if "faiss" in enabled:
+        retrievers.append(FAISSRetriever(faiss_index, cfg.embed_model))
+    if "bm25" in enabled:
+        retrievers.append(BM25Retriever(bm25_index))
+    if "index_keywords" in enabled:
+        retrievers.append(
+            IndexKeywordRetriever(
+                cfg.extracted_index_path,
+                _resolve_page_to_chunk_map_path(cfg, artifacts_dir, index_prefix),
+            )
+        )
+    if "graph" in enabled:
+        if graph_store is None:
+            raise ValueError("Graph retriever is enabled but graph artifacts were not loaded.")
+        retrievers.append(GraphRetriever(graph_store))
+
+    return retrievers
 
 
 class FAISSRetriever(Retriever):
@@ -255,10 +319,14 @@ class IndexKeywordRetriever(Retriever):
     @staticmethod
     def _lemmatize_word(word: str, lemmatizer) -> str:
         """Lemmatize a word, trying noun then verb."""
-        lemma = lemmatizer.lemmatize(word, pos='n')
-        if lemma == word:
-            lemma = lemmatizer.lemmatize(word, pos='v')
-        return lemma
+        try:
+            lemma = lemmatizer.lemmatize(word, pos='n')
+            if lemma == word:
+                lemma = lemmatizer.lemmatize(word, pos='v')
+            return lemma
+        except Exception:
+            # Fallback when local WordNet data is unavailable or corrupted.
+            return word
     
     @staticmethod
     def _extract_keywords(query: str) -> List[str]:

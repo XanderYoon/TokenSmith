@@ -1,6 +1,8 @@
 import textwrap, re
 from llama_cpp import Llama, LlamaRAMCache
 
+from src.runtime_models import detect_hardware_profile
+
 ANSWER_START = "<<<ANSWER>>>"
 ANSWER_END   = "<<<END>>>"
 
@@ -112,17 +114,25 @@ _LLM_CACHE = {}
 
 def get_llama_model(model_path: str, n_ctx: int = 4096):
     if model_path not in _LLM_CACHE:
+        hardware = detect_hardware_profile()
+        llama_kwargs = dict(
+            model_path=model_path,
+            n_ctx=n_ctx,
+            verbose=False,
+        )
         try:
-            _LLM_CACHE[model_path] = Llama(model_path=model_path,
-                                       n_ctx=n_ctx,
-                                       verbose=False,
-                                       n_gpu_layers=-1,
-                                       flash_attn=True)
+            if hardware.gpu_available:
+                llama_kwargs["n_gpu_layers"] = -1
+                llama_kwargs["flash_attn"] = True
+            _LLM_CACHE[model_path] = Llama(**llama_kwargs)
         except Exception as e:
-            print(f"Error loading LLaMA model from {model_path} on GPU: {e}")
-            _LLM_CACHE[model_path] = Llama(model_path=model_path,
-                                       n_ctx=n_ctx,
-                                       verbose=False)
+            if hardware.gpu_available:
+                print(f"Error loading LLaMA model from {model_path} with GPU backend {hardware.backend}: {e}")
+            _LLM_CACHE[model_path] = Llama(
+                model_path=model_path,
+                n_ctx=n_ctx,
+                verbose=False,
+            )
 
         cache = LlamaRAMCache()
         _LLM_CACHE[model_path].set_cache(cache)

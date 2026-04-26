@@ -1,0 +1,211 @@
+{
+  "bench_1A": {
+    "label": "1A",
+    "index_prefix": "chapter16_naive_baseline",
+    "artifacts_dir": "index/chapter16_extracted_markdown_recursive_4",
+    "chunking_method": "naive",
+    "benchmark_path": "index/chapter16_extracted_markdown_recursive_4/chapter16_naive_baseline_tuning/benchmarks/20260426T051757Z_experiment_1a_shared_automated_ragas_20_nonllm.json",
+    "prompt_count": 20,
+    "ragas": {
+      "nonllm_context_recall": 0.0,
+      "nonllm_context_precision": 0.0
+    },
+    "ragas_status": "completed",
+    "ragas_error": null,
+    "latency": {
+      "average_latency_seconds": 0.001408662753237877
+    },
+    "estimated_tokens": {
+      "average_estimated_total_tokens": 4982.35
+    },
+    "retrieval_overlap": {
+      "average_selected_recall_at_k": 0.1
+    },
+    "benchmark_settings": {
+      "answer_mode": "extractive_top2_context_preview",
+      "top_k": 10,
+      "ragas_metric_names": [
+        "nonllm_context_recall",
+        "nonllm_context_precision"
+      ]
+    }
+  },
+  "bench_1B": {
+    "label": "1B",
+    "index_prefix": "chapter16_structure_baseline",
+    "artifacts_dir": "index/chapter16_extracted_markdown_structure_1",
+    "chunking_method": "structure_aware",
+    "benchmark_path": "index/chapter16_extracted_markdown_structure_1/chapter16_structure_baseline_tuning/benchmarks/20260426T051757Z_experiment_1b_shared_automated_ragas_20_nonllm.json",
+    "prompt_count": 20,
+    "ragas": {
+      "nonllm_context_recall": 0.0,
+      "nonllm_context_precision": 0.0
+    },
+    "ragas_status": "completed",
+    "ragas_error": null,
+    "latency": {
+      "average_latency_seconds": 0.0010010687547037378
+    },
+    "estimated_tokens": {
+      "average_estimated_total_tokens": 4385.95
+    },
+    "retrieval_overlap": {
+      "average_selected_recall_at_k": 0.35
+    },
+    "benchmark_settings": {
+      "answer_mode": "extractive_top2_context_preview",
+      "top_k": 10,
+      "ragas_metric_names": [
+        "nonllm_context_recall",
+        "nonllm_context_precision"
+      ]
+    }
+  },
+  "bench_1C": {
+    "label": "1C",
+    "index_prefix": "chapter18_naive_baseline",
+    "artifacts_dir": "index/chapter18_extracted_markdown_recursive_1",
+    "chunking_method": "naive",
+    "benchmark_path": "index/chapter18_extracted_markdown_recursive_1/chapter18_naive_baseline_tuning/benchmarks/20260426T051911Z_experiment_1c_shared_automated_ragas_20_nonllm.json",
+    "prompt_count": 20,
+    "ragas": {
+      "nonllm_context_recall": 0.775,
+      "nonllm_context_precision": 0.6404761904190178
+    },
+    "ragas_status": "completed",
+    "ragas_error": null,
+    "latency": {
+      "average_latency_seconds": 0.0011952480534091591
+    },
+    "estimated_tokens": {
+      "average_estimated_total_tokens": 5013.4
+    },
+    "retrieval_overlap": {
+      "average_selected_recall_at_k": 0.25
+    },
+    "benchmark_settings": {
+      "answer_mode": "extractive_top2_context_preview",
+      "top_k": 10,
+      "ragas_metric_names": [
+        "nonllm_context_recall",
+        "nonllm_context_precision"
+      ]
+    }
+  },
+  "bench_1D": {
+    "label": "1D",
+    "index_prefix": "chapter18_structure_baseline",
+    "artifacts_dir": "index/chapter18_extracted_markdown_structure_2",
+    "chunking_method": "structure_aware",
+    "benchmark_path": "index/chapter18_extracted_markdown_structure_2/chapter18_structure_baseline_tuning/benchmarks/20260426T051910Z_experiment_1d_shared_automated_ragas_20_nonllm.json",
+    "prompt_count": 20,
+    "ragas": {
+      "nonllm_context_recall": 0.95,
+      "nonllm_context_precision": 0.723869047553747
+    },
+    "ragas_status": "completed",
+    "ragas_error": null,
+    "latency": {
+      "average_latency_seconds": 0.0027099919447209687
+    },
+    "estimated_tokens": {
+      "average_estimated_total_tokens": 4577.35
+    },
+    "retrieval_overlap": {
+      "average_selected_recall_at_k": 0.35
+    },
+    "benchmark_settings": {
+      "answer_mode": "extractive_top2_context_preview",
+      "top_k": 10,
+      "ragas_metric_names": [
+        "nonllm_context_recall",
+        "nonllm_context_precision"
+      ]
+    }
+  },
+  "bench_2B_SOURCE_A": {
+    "label": "2B_SOURCE_A",
+    "index_prefix": "chapter16_structure_baseline",
+    "artifacts_dir": "index/chapter16_extracted_markdown_structure_1",
+    "benchmark_path": "index/chapter16_extracted_markdown_structure_1/chapter16_structure_baseline_tuning/benchmarks/20260426T052043Z_experiment_2b_source_a_shared_automated_ragas_20_nonllm.json",
+    "prompt_count": 20,
+    "ragas": {
+      "nonllm_context_recall": 0.0,
+      "nonllm_context_precision": 0.0
+    },
+    "ragas_status": "completed",
+    "ragas_error": null,
+    "latency": {
+      "average_latency_seconds": 0.12143225134786917
+    },
+    "estimated_tokens": {
+      "average_estimated_total_tokens": 4484.55
+    },
+    "retrieval_overlap": {
+      "average_selected_recall_at_k": 0.2
+    },
+    "weights": {
+      "faiss": 0.55,
+      "bm25": 0.2,
+      "index_keywords": 0.1,
+      "graph": 0.15
+    },
+    "benchmark_settings": {
+      "answer_mode": "extractive_top2_context_preview",
+      "top_k": 10,
+      "ragas_metric_names": [
+        "nonllm_context_recall",
+        "nonllm_context_precision"
+      ]
+    }
+  },
+  "bench_2B_SOURCE_B": {
+    "label": "2B_SOURCE_B",
+    "index_prefix": "chapter18_structure_baseline",
+    "artifacts_dir": "index/chapter18_extracted_markdown_structure_2",
+    "benchmark_path": "index/chapter18_extracted_markdown_structure_2/chapter18_structure_baseline_tuning/benchmarks/20260426T052153Z_experiment_2b_source_b_shared_automated_ragas_20_nonllm.json",
+    "prompt_count": 20,
+    "ragas": {
+      "nonllm_context_recall": 0.875,
+      "nonllm_context_precision": 0.7017261904129344
+    },
+    "ragas_status": "completed",
+    "ragas_error": null,
+    "latency": {
+      "average_latency_seconds": 0.11417656350531616
+    },
+    "estimated_tokens": {
+      "average_estimated_total_tokens": 4746.05
+    },
+    "retrieval_overlap": {
+      "average_selected_recall_at_k": 0.3
+    },
+    "weights": {
+      "faiss": 0.55,
+      "bm25": 0.2,
+      "index_keywords": 0.1,
+      "graph": 0.15
+    },
+    "benchmark_settings": {
+      "answer_mode": "extractive_top2_context_preview",
+      "top_k": 10,
+      "ragas_metric_names": [
+        "nonllm_context_recall",
+        "nonllm_context_precision"
+      ]
+    }
+  },
+  "comparison": {
+    "naive": {
+      "avg_nonllm_context_recall": 0.3875,
+      "avg_nonllm_context_precision": 0.3202380952095089,
+      "avg_selected_recall_at_k": 0.175
+    },
+    "structure_aware": {
+      "avg_nonllm_context_recall": 0.475,
+      "avg_nonllm_context_precision": 0.3619345237768735,
+      "avg_selected_recall_at_k": 0.35
+    }
+  },
+  "winning_chunking": "structure_aware"
+}

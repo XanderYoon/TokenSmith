@@ -1,0 +1,35 @@
+{
+  "counts": {
+    "dataset_records": 0,
+    "demonstrations": 0
+  },
+  "paths": {
+    "demonstrations": "demonstrations.jsonl",
+    "exported_ranker_settings": "ranker_weights.export.yaml",
+    "model_state": "learned_weights.json",
+    "prompt_chunk_dataset": "prompt_chunk_dataset.jsonl"
+  },
+  "schema_version": 1,
+  "storage_format": {
+    "demonstrations": "jsonl",
+    "exported_ranker_settings": "yaml",
+    "model_state": "json",
+    "prompt_chunk_dataset": "jsonl"
+  },
+  "updated_at_utc": "2026-04-26T05:34:38.377231+00:00",
+  "weight_sources": {
+    "active_source": "baseline_config",
+    "active_weights": {
+      "bm25": 0.0,
+      "faiss": 1.0,
+      "graph": 0.0,
+      "index_keywords": 0.0
+    },
+    "baseline_config": {
+      "bm25": 0.0,
+      "faiss": 1.0,
+      "graph": 0.0,
+      "index_keywords": 0.0
+    }
+  }
+}

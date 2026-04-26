@@ -21,6 +21,7 @@ dependencies:
     - nltk
     - transformers
     - sentence-transformers
+    - huggingface-hub
     - rank_bm25
     - langchain
     - langchain_text_splitters

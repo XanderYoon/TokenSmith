@@ -35,7 +35,7 @@ from src.feedback_store import (
 )
 from src.instrumentation.logging import get_logger
 from src.ranking.ranker import EnsembleRanker
-from src.retriever import filter_retrieved_chunks, BM25Retriever, FAISSRetriever, IndexKeywordRetriever, get_page_numbers, load_artifacts
+from src.retriever import filter_retrieved_chunks, build_retrievers, get_page_numbers, load_artifacts
 from src.user_feedback_model import TopicExtractor, estimate_difficulty
 
 # Constants
@@ -94,6 +94,14 @@ class ChatResponse(BaseModel):
 def _resolve_config_path() -> pathlib.Path:
     """Return the absolute path to the API config."""
     return pathlib.Path(__file__).resolve().parent.parent / "config" / "config.yaml"
+
+
+def _resolve_runtime_config(cfg: RAGConfig) -> tuple[RAGConfig, Dict[str, object]]:
+    runtime_selection = cfg.resolve_runtime_models()
+    config_state = cfg.get_config_state()
+    config_state["embed_model"] = runtime_selection["embed_model"]
+    config_state["gen_model"] = runtime_selection["gen_model"]
+    return RAGConfig(**config_state), runtime_selection
 
 
 def _ensure_initialized():
@@ -175,14 +183,25 @@ async def lifespan(app: FastAPI):
     if not config_path.exists():
         raise FileNotFoundError(f"No config file found at {config_path}")
 
-    _config = RAGConfig.from_yaml(config_path)    
+    _config = RAGConfig.from_yaml(config_path)
+    _config, runtime_selection = _resolve_runtime_config(_config)
     _logger = get_logger()
+    print(
+        "TokenSmith runtime model selection: "
+        f"profile={runtime_selection['selected_profile']} "
+        f"backend={runtime_selection['hardware_backend']} "
+        f"embed={runtime_selection['embed_model']} "
+        f"gen={runtime_selection['gen_model']}"
+    )
+    if runtime_selection.get("gpu_model_missing"):
+        print("GPU profile selected but one or more GPU GGUF files were missing. Using baseline models instead.")
 
     try:
-        artifacts_dir = _config.get_artifacts_directory()
-        faiss_index, bm25_index, chunks, sources, metadata = load_artifacts(
+        artifacts_dir = _config.resolve_artifacts_directory(INDEX_PREFIX)
+        faiss_index, bm25_index, chunks, sources, metadata, graph_store = load_artifacts(
             artifacts_dir=artifacts_dir,
-            index_prefix=INDEX_PREFIX
+            index_prefix=INDEX_PREFIX,
+            cfg=_config,
         )
 
         _artifacts = {
@@ -191,20 +210,18 @@ async def lifespan(app: FastAPI):
             "meta": metadata,
         }
 
-        _retrievers = [
-            FAISSRetriever(faiss_index, _config.embed_model),
-            BM25Retriever(bm25_index),
-        ]
-        
-        # Add index keyword retriever if weight > 0
-        if _config.ranker_weights.get("index_keywords", 0) > 0:
-            _retrievers.append(
-                IndexKeywordRetriever(_config.extracted_index_path, _config.page_to_chunk_map_path)
-            )
+        _retrievers = build_retrievers(
+            _config,
+            faiss_index=faiss_index,
+            bm25_index=bm25_index,
+            artifacts_dir=artifacts_dir,
+            index_prefix=INDEX_PREFIX,
+            graph_store=graph_store,
+        )
 
         _ranker = EnsembleRanker(
             ensemble_method=_config.ensemble_method,
-            weights=_config.ranker_weights,
+            weights=_config.get_active_ranker_weights(),
             rrf_k=int(_config.rrf_k),
         )
 
@@ -212,7 +229,10 @@ async def lifespan(app: FastAPI):
         if _config.enable_topic_extraction:
             _topic_extractor = TopicExtractor(
                 extracted_index_path=_config.extracted_index_path,
-                page_to_chunk_map_path=_config.page_to_chunk_map_path,
+                page_to_chunk_map_path=_config.get_page_to_chunk_map_artifact_path(
+                    INDEX_PREFIX,
+                    artifacts_dir=artifacts_dir,
+                ),
             )
         else:
             _topic_extractor = None

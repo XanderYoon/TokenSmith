@@ -35,6 +35,17 @@ OS="$(uname -s)"
 ARCH="$(uname -m)"
 CMAKE_OPTS=()
 
+detect_amd_gpu() {
+  if command -v rocm-smi >/dev/null 2>&1; then
+    return 0
+  fi
+  if command -v lspci >/dev/null 2>&1 && lspci | grep -Eiq 'vga|3d|display'; then
+    lspci | grep -Eiq 'amd|radeon|advanced micro devices'
+    return $?
+  fi
+  return 1
+}
+
 case "$OS" in
   Darwin)
     log "Configuring for macOS ($ARCH)..."
@@ -50,9 +61,12 @@ case "$OS" in
     if command -v nvidia-smi >/dev/null 2>&1; then
       log "NVIDIA GPU detected — enabling CUDA"
       CMAKE_OPTS+=(-DGGML_CUDA=ON)
+    elif detect_amd_gpu; then
+      log "AMD GPU detected — enabling Vulkan"
+      CMAKE_OPTS+=(-DGGML_VULKAN=ON)
     else
-      log "CPU-only build (no NVIDIA GPU detected)"
-      CMAKE_OPTS+=(-DGGML_ACCELERATE=ON)
+      log "CPU-only build (no supported GPU detected)"
+      CMAKE_OPTS+=(-DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS)
     fi
     ;;
   *)

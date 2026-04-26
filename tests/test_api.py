@@ -34,6 +34,7 @@ class TestRAGConfig:
         assert cfg.num_candidates >= cfg.top_k
         assert cfg.ensemble_method in {"linear", "weighted", "rrf"}
         assert cfg.chunk_config is not None
+        assert "graph" in cfg.get_active_ranker_weights()
     
     def test_validation_top_k_positive(self):
         """RAGConfig rejects top_k <= 0."""
@@ -62,10 +63,11 @@ class TestRAGConfig:
         
         cfg = RAGConfig(
             ensemble_method="linear",
-            ranker_weights={"faiss": 2.0, "bm25": 2.0}
+            ranker_weights={"faiss": 2.0, "bm25": 2.0},
+            enabled_retrievers=["faiss", "bm25"]
         )
         
-        total = sum(cfg.ranker_weights.values())
+        total = sum(cfg.get_active_ranker_weights().values())
         assert abs(total - 1.0) < 1e-6
     
     def test_from_yaml(self, tmp_path):
@@ -98,6 +100,17 @@ rrf_k: 50
         assert isinstance(cfg.chunk_config, SectionRecursiveConfig)
         assert cfg.chunk_config.recursive_chunk_size == 1000
         assert cfg.chunk_config.recursive_overlap == 100
+
+    def test_naive_chunk_config_created(self):
+        """naive chunk_config is created during initialization."""
+        from src.config import RAGConfig
+        from src.preprocessing.chunking import NaiveRecursiveConfig
+
+        cfg = RAGConfig(chunk_mode="recursive_naive", chunk_size=900, chunk_overlap=75)
+
+        assert isinstance(cfg.chunk_config, NaiveRecursiveConfig)
+        assert cfg.chunk_config.recursive_chunk_size == 900
+        assert cfg.chunk_config.recursive_overlap == 75
     
     def test_get_chunk_strategy(self):
         """get_chunk_strategy returns correct strategy."""
@@ -108,6 +121,16 @@ rrf_k: 50
         strategy = cfg.get_chunk_strategy()
         
         assert isinstance(strategy, SectionRecursiveStrategy)
+
+    def test_get_naive_chunk_strategy(self):
+        """get_chunk_strategy returns naive strategy when configured."""
+        from src.config import RAGConfig
+        from src.preprocessing.chunking import NaiveRecursiveStrategy
+
+        cfg = RAGConfig(chunk_mode="recursive_naive")
+        strategy = cfg.get_chunk_strategy()
+
+        assert isinstance(strategy, NaiveRecursiveStrategy)
 
 
 # ====================== EnsembleRanker Tests ======================
@@ -311,6 +334,23 @@ class TestRetrieverInterface:
             
             assert isinstance(scores, dict)
 
+    def test_graph_retriever_interface(self):
+        """GraphRetriever returns chunk-score dictionaries."""
+        from src.graph.retrieval import GraphRetriever
+        from src.graph.store import GraphStore
+
+        chunks = [
+            "Transactions guarantee atomicity and durability.",
+            "Indexes accelerate query execution.",
+        ]
+
+        retriever = GraphRetriever(GraphStore.from_chunks(chunks))
+        scores = retriever.get_scores("How do transactions work?", pool_size=3, chunks=chunks)
+
+        assert isinstance(scores, dict)
+        assert all(isinstance(k, int) for k in scores.keys())
+        assert all(isinstance(v, float) for v in scores.values())
+
 
 # ====================== Generator Tests ======================
 
@@ -427,6 +467,20 @@ class TestChunkingAPI:
         text = "This is a test. " * 50  # Long enough to chunk
         chunks = strategy.chunk(text)
         
+        assert isinstance(chunks, list)
+        assert len(chunks) > 0
+        assert all(isinstance(c, str) for c in chunks)
+
+    def test_naive_recursive_strategy(self):
+        """NaiveRecursiveStrategy chunks text correctly."""
+        from src.preprocessing.chunking import NaiveRecursiveStrategy, NaiveRecursiveConfig
+
+        config = NaiveRecursiveConfig(recursive_chunk_size=100, recursive_overlap=10)
+        strategy = NaiveRecursiveStrategy(config)
+
+        text = "This is a test. " * 50
+        chunks = strategy.chunk(text)
+
         assert isinstance(chunks, list)
         assert len(chunks) > 0
         assert all(isinstance(c, str) for c in chunks)
@@ -601,6 +655,7 @@ class TestLoadArtifacts:
     def test_load_artifacts_returns_tuple(self):
         """load_artifacts returns expected tuple structure."""
         from src.retriever import load_artifacts
+        from src.graph.store import GraphStore, save_graph_store
         import pickle
         import faiss
         
@@ -633,9 +688,12 @@ class TestLoadArtifacts:
             meta = [{"page": 1}, {"page": 2}, {"page": 3}]
             with open(f"{tmpdir}/{prefix}_meta.pkl", "wb") as f:
                 pickle.dump(meta, f)
+
+            graph_store = GraphStore.from_chunks(chunks)
+            save_graph_store(graph_store, Path(tmpdir) / f"{prefix}_graph.json")
             
             # Load and verify
-            faiss_idx, bm25_idx, loaded_chunks, loaded_sources, loaded_meta = load_artifacts(
+            faiss_idx, bm25_idx, loaded_chunks, loaded_sources, loaded_meta, loaded_graph = load_artifacts(
                 tmpdir, prefix
             )
             
@@ -644,6 +702,7 @@ class TestLoadArtifacts:
             assert loaded_chunks == chunks
             assert loaded_sources == sources
             assert loaded_meta == meta
+            assert loaded_graph is not None
 
 
 # ====================== Filter Retrieved Chunks Tests ======================
@@ -746,6 +805,21 @@ class TestEndToEndAPIContracts:
         chunks = strategy.chunk(text)
         
         assert len(chunks) > 0
+
+    def test_config_to_naive_strategy_pipeline(self):
+        """Config -> naive ChunkConfig -> Strategy pipeline works."""
+        from src.config import RAGConfig
+        from src.preprocessing.chunking import NaiveRecursiveStrategy
+
+        cfg = RAGConfig(chunk_mode="recursive_naive", chunk_size=500, chunk_overlap=50)
+        strategy = cfg.get_chunk_strategy()
+
+        assert isinstance(strategy, NaiveRecursiveStrategy)
+
+        text = "Test content. " * 100
+        chunks = strategy.chunk(text)
+
+        assert len(chunks) > 0
     
     def test_retriever_to_ranker_pipeline(self):
         """Retriever scores -> Ranker pipeline works."""
@@ -754,12 +828,13 @@ class TestEndToEndAPIContracts:
         # Simulated retriever output
         raw_scores = {
             "faiss": {0: 0.9, 1: 0.7, 2: 0.5, 3: 0.3},
-            "bm25": {0: 0.4, 1: 0.8, 2: 0.6, 3: 0.9}
+            "bm25": {0: 0.4, 1: 0.8, 2: 0.6, 3: 0.9},
+            "graph": {2: 0.95, 3: 0.7}
         }
         
         ranker = EnsembleRanker(
             ensemble_method="rrf",
-            weights={"faiss": 0.5, "bm25": 0.5},
+            weights={"faiss": 0.4, "bm25": 0.4, "graph": 0.2},
             rrf_k=60
         )
         

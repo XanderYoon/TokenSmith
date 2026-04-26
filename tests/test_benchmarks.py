@@ -176,7 +176,7 @@ def get_tokensmith_answer(question, config, golden_chunks=None):
     from src.main import get_answer
     from src.instrumentation.logging import get_logger
     from src.config import RAGConfig
-    from src.retriever import BM25Retriever, FAISSRetriever, IndexKeywordRetriever, load_artifacts
+    from src.retriever import build_retrievers, load_artifacts
     from src.ranking.ranker import EnsembleRanker
     import argparse
     
@@ -224,25 +224,24 @@ def get_tokensmith_answer(question, config, golden_chunks=None):
 
     # Run the query through the main pipeline
     artifacts_dir = cfg.get_artifacts_directory()
-    faiss_index, bm25_index, chunks, sources, metadata = load_artifacts(
+    faiss_index, bm25_index, chunks, sources, metadata, graph_store = load_artifacts(
         artifacts_dir=artifacts_dir, 
-        index_prefix=config["index_prefix"]
+        index_prefix=config["index_prefix"],
+        cfg=cfg,
     )
 
-    retrievers = [
-        FAISSRetriever(faiss_index, cfg.embed_model),
-        BM25Retriever(bm25_index)
-    ]
-    
-    # Add index keyword retriever if weight > 0
-    if cfg.ranker_weights.get("index_keywords", 0) > 0:
-        retrievers.append(
-            IndexKeywordRetriever(cfg.extracted_index_path, cfg.page_to_chunk_map_path)
-        )
+    retrievers = build_retrievers(
+        cfg,
+        faiss_index=faiss_index,
+        bm25_index=bm25_index,
+        artifacts_dir=artifacts_dir,
+        index_prefix=config["index_prefix"],
+        graph_store=graph_store,
+    )
     
     ranker = EnsembleRanker(
         ensemble_method=cfg.ensemble_method,
-        weights=cfg.ranker_weights,
+        weights=cfg.get_active_ranker_weights(),
         rrf_k=int(cfg.rrf_k)
     )
     
